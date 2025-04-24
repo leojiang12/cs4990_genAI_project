@@ -37,12 +37,12 @@ To install dependencies, run from project root:
 
 ### To run, run this command from project root:
 
-python -m src.train \\\
+`python -m src.train \\\
   --data_root data/train \\\
-  --max_samples 1 \\\
+  --max_samples 4 \\\
   --crop_size 512 \\\
   --batch_size 4 \\\
-  --epochs 5 \\\
+  --epochs 20 \\\
   --log_interval 1 \\\
   --log_dir runs/test \\\
-  --ckpt_dir checkpoints/test
+  --ckpt_dir checkpoints/test`
