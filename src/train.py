@@ -79,10 +79,11 @@ def train(cfg):
                 print(msg)
 
         # End-of-epoch checkpoint & sample
-        ckpt_path = os.path.join(cfg.ckpt_dir, f"gen_epoch{epoch}.pth")
-        os.makedirs(cfg.ckpt_dir, exist_ok=True)
-        torch.save(gen.state_dict(), ckpt_path)
-        print(f"[{datetime.now()}] Saved checkpoint: {ckpt_path}")
+        if epoch % cfg.checkpoint_interval == 0:
+            ckpt_path = os.path.join(cfg.ckpt_dir, f"gen_epoch{epoch}.pth")
+            os.makedirs(cfg.ckpt_dir, exist_ok=True)
+            torch.save(gen.state_dict(), ckpt_path)
+            print(f"[{datetime.now()}] Saved checkpoint: {ckpt_path}")
 
         # Log sample images to TensorBoard
         with torch.no_grad():
@@ -113,6 +114,8 @@ if __name__ == "__main__":
     p.add_argument("--ckpt_dir",    type=str,   default="checkpoints")
     p.add_argument("--log_interval",type=int,   default=100,
                    help="batches between terminal logs")
+    p.add_argument("--checkpoint_interval",type=int,   default=10,
+                   help="batches between checkpoints")
     p.add_argument("--use_mask",    action="store_true",
                    help="concat polygon mask as extra channel")
     cfg = p.parse_args()
