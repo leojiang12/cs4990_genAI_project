@@ -16,14 +16,14 @@ xbd_scratch/ \
 ├── configs/                # json/yaml hyperparameter files \
 ├── scripts/ \
 │   └── sbatch_train.sh     # HPC submission script \
-└── README.md \
+└── README.md
 
 ### Create symlinks to point empty data directories to true directories
 
 ln -s .../TRAIN_PATH         data/train     # Training dataset (tier 1 + tier 3) \
 ln -s .../TEST_PATH         data/test       # Publically available test dataset \
 ln -s .../TIER3_PATH         data/tier3     # Harder train cases \
-ln -s .../HOLD_PATH         data/hold       # Judge's test set \
+ln -s .../HOLD_PATH         data/hold       # Judge's test set
 
 ### Set-up conda environment:
 
@@ -45,4 +45,4 @@ python -m src.train \\\
   --epochs 5 \\\
   --log_interval 1 \\\
   --log_dir runs/test \\\
-  --ckpt_dir checkpoints/test \\\
+  --ckpt_dir checkpoints/test
