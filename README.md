@@ -46,3 +46,4 @@ python -m src.train \\\
   --log_interval 1 \\\
   --log_dir runs/test \\\
   --ckpt_dir checkpoints/test
+  

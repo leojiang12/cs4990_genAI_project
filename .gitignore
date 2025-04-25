@@ -1,2 +1,3 @@
-**/runs
-checkpoints/
+/runs/
+/checkpoints/
+/data/
