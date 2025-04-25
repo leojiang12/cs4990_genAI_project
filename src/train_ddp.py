@@ -19,6 +19,9 @@ from src.datasets import XBDPairDataset
 from src.models   import UNetGenerator, PatchDiscriminator
 from src.losses   import adversarial_loss, l1_loss
 
+torch.autograd.set_detect_anomaly(True)
+
+
 def setup_ddp(args):
     """Initialize torch.distributed."""
     # Usually launched via torchrun which sets these env vars.
