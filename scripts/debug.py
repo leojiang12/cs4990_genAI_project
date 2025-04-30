@@ -72,4 +72,7 @@ def main():
     for root in roots:
         cnt = debug_root(root, args.crop_size, args.max_samples, args.annotate)
         total += cnt
-    logging.info(f"=== TOTAL across {roots}:
+    logging.info(f"=== TOTAL across {roots}: {total} ===")
+
+if __name__ == "__main__":
+    main()
