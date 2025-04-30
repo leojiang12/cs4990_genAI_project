@@ -8,7 +8,7 @@ import glob
 import json
 import logging
 from pathlib import Path
-from src.datasets.xbd_pair import XBDPairDataset
+from src.datasets import XBDPairDataset
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s: %(message)s")
 
