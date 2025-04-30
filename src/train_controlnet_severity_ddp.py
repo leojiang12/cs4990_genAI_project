@@ -69,16 +69,27 @@ def main(args):
 
     controlnet = DDP(controlnet, device_ids=[args.local_rank], output_device=args.local_rank)
 
-    # ── 2) Dataset & Dataloader ────────────────────────
-    ds = XBDPairDataset(
-        labels_dir=args.labels_dir,
-        images_dir=args.images_dir,
-        crop_size=args.crop_size,
-        max_samples=args.max_samples,
-        annotate=False
-    )
+    # ── 2) Dataset & Dataloader (merged across multiple roots) ─────────
+    from torch.utils.data import ConcatDataset
+
+    roots = [r.strip() for r in args.data_roots.split(",") if r.strip()]
+    all_ds = []
+    for root in roots:
+        lbl = os.path.join(root, "labels")
+        img = os.path.join(root, "images")
+        all_ds.append(
+            XBDPairDataset(
+                labels_dir=lbl,
+                images_dir=img,
+                crop_size=args.crop_size,
+                max_samples=args.max_samples,
+                annotate=False,
+            )
+        )
+    ds = ConcatDataset(all_ds)
     if is_main_process():
         logging.info(f"Dataset samples found: {len(ds)}")
+        logging.info(f"Total samples across {roots}: {len(ds)}")
 
     sampler = DistributedSampler(ds, num_replicas=args.world_size, rank=args.rank, shuffle=True)
     loader  = DataLoader(ds, batch_size=args.batch_size, sampler=sampler,
@@ -176,6 +187,13 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--labels_dir",       type=str, required=True)
     p.add_argument("--images_dir",       type=str, required=True)
+
+    p.add_argument(
+        "--data_roots",
+        type=str,
+        required=True,
+        help="Comma-separated roots, e.g. data/train,data/tier3,data/test"
+    )
     p.add_argument("--crop_size",        type=int, default=512)
     p.add_argument("--max_samples",      type=int, default=None)
     p.add_argument("--batch_size",       type=int, default=4)
