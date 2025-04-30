@@ -95,9 +95,10 @@ def main(args):
             post = batch["post"].to(device)                    # [B,3,H,W]
             severity = batch["severity"].to(device).unsqueeze(-1)  # [B,1]
 
-            # a) Build severity map as 1-channel control
+            # a) Build severity map and tile to 3 channels for ControlNet
             B,_,H,W = pre.shape
-            control_map = severity.view(B,1,1,1).expand(B,1,H,W)
+            # severity is [B,1]; reshape to [B,1,1,1] then expand to [B,3,H,W]
+            control_map = severity.view(B,1,1,1).expand(B,3,H,W)
 
             # b) Dummy text tokens (“photo”) 
             prompts = ["photo"] * B
