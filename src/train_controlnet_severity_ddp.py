@@ -150,6 +150,26 @@ def main(args):
 
     if is_main_process():
         print("=== Training Complete ===")
+
+    from torchinfo import summary
+
+    if is_main_process():
+        # Summarize the *combined* pipeline:
+        summary(
+            {
+                "latents":    torch.randn(1, unet.in_channels, H, W).to(device),
+                "timesteps":  torch.randint(0, scheduler.num_train_timesteps, (1,), device=device),
+                "text_embeds":torch.randn(1, tokenizer.model_max_length, text_encoder.config.hidden_size).to(device),
+                "ctrl_map":   torch.rand(1, 1, H, W).to(device),
+            },
+            model={
+                "ControlNet": controlnet.module, 
+                "UNet":       unet
+            },
+            col_names=["input_size", "output_size", "num_params"],
+            depth=5
+        )
+
     cleanup_ddp()
 
 if __name__ == "__main__":

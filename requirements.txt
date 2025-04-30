@@ -10,3 +10,4 @@ diffusers[torch]
 transformers
 accelerate
 safetensors
+torchinfo
