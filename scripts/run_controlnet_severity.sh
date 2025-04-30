@@ -11,8 +11,8 @@
 echo "===== JOB START $(date) ====="
 
 # load your conda environment
-source /data03/home/leojiang/miniconda3/etc/profile.d/conda.sh
-conda activate xbd
+# source /data03/home/leojiang/miniconda3/etc/profile.d/conda.sh
+# conda activate xbd
 
 # ensure TensorBoard log dir exists
 TB_DIR="${SLURM_SUBMIT_DIR}/tb_logs"
