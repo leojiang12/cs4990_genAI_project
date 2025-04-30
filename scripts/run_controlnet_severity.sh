@@ -9,7 +9,7 @@
 #SBATCH --output=logs/train_%j.log     # %j = job ID
 
 # load conda
-source ~/miniconda3/etc/profile.d/conda.sh
+source /data03/home/leojiang/miniconda3/condabin/conda
 conda activate xbd
 
 # make sure our logs directory exists
