@@ -5,7 +5,7 @@
 #SBATCH --ntasks-per-node=2
 #SBATCH --gres=gpu:gp100gl:2
 #SBATCH --mem=64G
-#SBATCH --t 3-00:00:00
+#SBATCH -t 3-00:00:00
 #SBATCH --output=logs/train_%j.log
 #SBATCH --error=logs/train_%j.err
 
