@@ -121,22 +121,27 @@ def main(args):
             )
             noisy = scheduler.add_noise(latents, noise, timesteps)
 
-            # e) ControlNet forward
+            # e) ControlNet forward (same as before)
             ctrl_outputs = controlnet(
-                noisy, timestep=timesteps,
-                encoder_hidden_states=text_embeds,
-                controlnet_cond=control_map
-            )
-            # extract the features as needed (v2.x vs v1.x API)
-            down_samples = getattr(ctrl_outputs, "down_block_res_samples", ctrl_outputs)
-
-            # f) UNet forward
-            model_pred = unet(
                 noisy,
                 timestep=timesteps,
                 encoder_hidden_states=text_embeds,
-                cross_attention_kwargs={"controlnet": down_samples},
-            ).sample
+                controlnet_cond=control_map,
+            )
+            down_samples  = ctrl_outputs.down_block_res_samples       # list of [B,C_i,H,W]
+            mid_sample    = ctrl_outputs.mid_block_res_sample         # one [B,C_mid,H,W]
+
+            # f) UNet forward (hook in the ControlNet residuals)
+            model_out = unet(
+                noisy,
+                timestep=timesteps,
+                encoder_hidden_states=text_embeds,
+                down_block_additional_residuals=down_samples,
+                mid_block_additional_residual=mid_sample,
+            )
+            # in diffusers v2.x this returns a UNetOutput with `.sample`
+            model_pred = model_out.sample
+
 
             # g) Loss & backward
             loss = torch.nn.functional.mse_loss(model_pred, noise)
