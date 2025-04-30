@@ -23,7 +23,7 @@ mkdir -p "$TB_DIR"
 # TB_PID=$!
 
 # run distributed training
-torchrun --nproc_per_node=2 -m src.train_controlnet_severity_ddp \
+conda run -n xbd torchrun --nproc_per_node=2 -m src.train_controlnet_severity_ddp \
     --labels_dir    data/train/labels \
     --images_dir    data/train/images \
     --batch_size    2 \
@@ -35,4 +35,4 @@ torchrun --nproc_per_node=2 -m src.train_controlnet_severity_ddp \
 echo "===== JOB END $(date) ====="
 
 # clean up TensorBoard
-kill $TB_PID || true
+#kill $TB_PID || true
