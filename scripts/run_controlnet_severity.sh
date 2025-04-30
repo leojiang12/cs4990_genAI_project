@@ -17,9 +17,6 @@ LOGFILE=logs/train_$(date +%Y%m%d_%H%M%S).log
 
 echo "========== JOB START $(date) ==========" | tee -a ${LOGFILE}
 
-# launch TensorBoard in background (writes into tensorboard/)
-tensorboard --logdir tensorboard --host 0.0.0.0 &
-TB_PID=$!
 
 # run training
 conda run -n xbd torchrun --nproc_per_node=2 -m src.train_controlnet_severity_ddp \
