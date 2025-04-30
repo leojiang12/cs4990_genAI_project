@@ -11,6 +11,10 @@
 
 echo "===== JOB START $(date) ====="
 
+module purge
+module load GPU/cuda/cuda-11.7     # ↳ pick whatever your center uses
+module load GPU/cuda/cudnn-8.3.1.22-11.5   # ↳ if required
+
 # load your conda environment
 source /data03/home/leojiang/miniconda3/etc/profile.d/conda.sh
 conda activate xbd
