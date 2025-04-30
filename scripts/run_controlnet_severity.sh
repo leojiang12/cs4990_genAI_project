@@ -12,7 +12,7 @@ echo "===== JOB START $(date) ====="
 
 # load your conda environment
 source /data03/home/leojiang/miniconda3/etc/profile.d/conda.sh
-# conda activate xbd
+conda activate xbd
 
 # ensure TensorBoard log dir exists
 TB_DIR="${SLURM_SUBMIT_DIR}/tb_logs"
@@ -23,7 +23,7 @@ mkdir -p "$TB_DIR"
 # TB_PID=$!
 
 # run distributed training
-conda run -n xbd torchrun --nproc_per_node=2 -m src.train_controlnet_severity_ddp \
+torchrun --nproc_per_node=2 -m src.train_controlnet_severity_ddp \
     --labels_dir    data/train/labels \
     --images_dir    data/train/images \
     --batch_size    2 \
