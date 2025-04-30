@@ -6,3 +6,7 @@ tensorboard
 pandas
 shapely
 folium
+diffusers[torch]
+transformers
+accelerate
+safetensors
