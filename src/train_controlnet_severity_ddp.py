@@ -1,7 +1,7 @@
 import os
 import argparse
-import logging
 from datetime import datetime
+import logging
 from tqdm import tqdm
 
 import torch
@@ -21,6 +21,7 @@ from transformers import CLIPTextModel, CLIPTokenizer
 
 from src.datasets import XBDPairDataset
 
+
 def setup_ddp(args):
     args.rank       = int(os.environ["RANK"])
     args.world_size = int(os.environ["WORLD_SIZE"])
@@ -33,49 +34,38 @@ def setup_ddp(args):
         rank=args.rank
     )
 
+
 def cleanup_ddp():
     dist.destroy_process_group()
+
 
 def is_main_process():
     return dist.get_rank() == 0
 
+
 def main(args):
-    # ── DDP setup ──────────────────────────────────────
+    # ── Logging setup ─────────────────────────────────
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
     setup_ddp(args)
     device = torch.device(f"cuda:{args.local_rank}")
 
-    # ── Logging setup ──────────────────────────────────
-    if is_main_process():
-        os.makedirs(args.tensorboard_dir, exist_ok=True)
-        log_filename = os.path.join(args.tensorboard_dir,
-            f"train_{datetime.now():%Y%m%d_%H%M%S}.log")
-        logging.basicConfig(
-            level=logging.INFO,
-            format="%(asctime)s %(levelname)s %(message)s",
-            handlers=[
-                logging.FileHandler(log_filename),
-                logging.StreamHandler()
-            ]
-        )
-        logging.info(f"Starting DDP training on {args.world_size} GPUs")
-
-        # TensorBoard
-        tb_writer = SummaryWriter(log_dir=args.tensorboard_dir)
-    else:
-        tb_writer = None
-
     # ── 1) Load & freeze models ────────────────────────
-    vae          = AutoencoderKL.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="vae").to(device)
-    tokenizer    = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+    vae        = AutoencoderKL.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="vae").to(device)
+    tokenizer  = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
     text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14").to(device)
-    unet         = UNet2DConditionModel.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="unet").to(device)
-    controlnet   = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-depth").to(device)
-    scheduler    = DDPMScheduler.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="scheduler")
+    unet       = UNet2DConditionModel.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="unet").to(device)
+    controlnet = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-depth").to(device)
+    scheduler  = DDPMScheduler.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="scheduler")
 
-    for p in vae.parameters():         p.requires_grad = False
-    for p in unet.parameters():        p.requires_grad = False
-    for p in text_encoder.parameters():p.requires_grad = False
-    for p in controlnet.parameters():  p.requires_grad = True
+    for p in vae.parameters():           p.requires_grad = False
+    for p in unet.parameters():          p.requires_grad = False
+    for p in text_encoder.parameters():  p.requires_grad = False
+    for p in controlnet.parameters():    p.requires_grad = True
 
     controlnet = DDP(controlnet, device_ids=[args.local_rank], output_device=args.local_rank)
 
@@ -87,86 +77,92 @@ def main(args):
         max_samples=args.max_samples,
         annotate=False
     )
+    if is_main_process():
+        logging.info(f"Dataset samples found: {len(ds)}")
+
     sampler = DistributedSampler(ds, num_replicas=args.world_size, rank=args.rank, shuffle=True)
     loader  = DataLoader(ds, batch_size=args.batch_size, sampler=sampler,
                          num_workers=4, pin_memory=True)
 
     if is_main_process():
-        logging.info(f"Dataset samples found: {len(ds)}")
+        logging.info(f"DDP Training on {args.world_size} GPUs")
 
-    # ── 3) Optimizer ────────────────────────────────────
+    # ── 3) TensorBoard ──────────────────────────────────
+    writer = None
+    if is_main_process() and args.tensorboard_dir:
+        os.makedirs(args.tensorboard_dir, exist_ok=True)
+        writer = SummaryWriter(log_dir=args.tensorboard_dir)
+        logging.info(f"TensorBoard logs → {args.tensorboard_dir}")
+
+    # ── 4) Optimizer ────────────────────────────────────
     optimizer = AdamW(controlnet.parameters(), lr=args.lr)
 
-    # ── 4) Training Loop ────────────────────────────────
-    global_step = 0
+    # ── 5) Training Loop ────────────────────────────────
+    total_steps = 0
     for epoch in range(1, args.epochs + 1):
         sampler.set_epoch(epoch)
-        if is_main_process():
-            logging.info(f"Epoch {epoch}/{args.epochs} start")
-
         loop = tqdm(loader, desc=f"Epoch [{epoch}/{args.epochs}]", disable=not is_main_process())
-        for batch in loop:
-            pre      = batch["pre"].to(device)
-            post     = batch["post"].to(device)
-            severity = batch["severity"].to(device).unsqueeze(-1)
 
-            # a) severity‐map → 3 ch
-            B,_,H,W = pre.shape
+        for i, batch in enumerate(loop, 1):
+            pre      = batch["pre"].to(device)                       # [B,3,H,W]
+            post     = batch["post"].to(device)                      # [B,3,H,W]
+            severity = batch["severity"].to(device).unsqueeze(-1)    # [B,1]
+
+            B, _, H, W = pre.shape
             control_map = severity.view(B,1,1,1).expand(B,3,H,W)
 
-            # b) text embeddings
+            # text
             prompts = ["photo"] * B
-            tokens  = tokenizer(prompts, return_tensors="pt",
-                                padding="max_length", truncation=True,
-                                max_length=tokenizer.model_max_length).to(device)
+            tokens  = tokenizer(prompts, return_tensors="pt", padding="max_length",
+                                truncation=True, max_length=tokenizer.model_max_length).to(device)
             text_embeds = text_encoder(**tokens).last_hidden_state
 
-            # c) encode post → latents
+            # encode + noise
             with torch.no_grad():
                 latents = vae.encode(post).latent_dist.sample() * vae.config.scaling_factor
-
-            # d) noise + timesteps
             noise     = torch.randn_like(latents)
-            timesteps = torch.randint(0, scheduler.config.num_train_timesteps, (B,), device=device)
+            timesteps = torch.randint(0, scheduler.config.num_train_timesteps,
+                                      (B,), device=device)
             noisy     = scheduler.add_noise(latents, noise, timesteps)
 
-            # e) ControlNet
-            ctrl_outs     = controlnet(noisy, timestep=timesteps,
-                                       encoder_hidden_states=text_embeds,
-                                       controlnet_cond=control_map)
-            down_res      = ctrl_outs.down_block_res_samples
-            mid_res       = ctrl_outs.mid_block_res_sample
+            # ControlNet
+            ctrl = controlnet(noisy, timestep=timesteps,
+                              encoder_hidden_states=text_embeds,
+                              controlnet_cond=control_map)
+            down_samples = getattr(ctrl, "down_block_res_samples", ctrl)
 
-            # f) UNet
-            unet_out = unet(noisy, timestep=timesteps,
-                            encoder_hidden_states=text_embeds,
-                            down_block_additional_residuals=down_res,
-                            mid_block_additional_residual=mid_res)
-            model_pred = unet_out.sample
+            # UNet
+            model_out  = unet(noisy, timestep=timesteps,
+                              encoder_hidden_states=text_embeds,
+                              cross_attention_kwargs={"controlnet": down_samples})
+            model_pred = model_out.sample
 
-            # g) loss & backward
+            # loss & step
             loss = torch.nn.functional.mse_loss(model_pred, noise)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
-            # logging
+            total_steps += 1
+            loop.set_postfix(loss=f"{loss:.4f}")
             if is_main_process():
-                tb_writer.add_scalar("train/mse_loss", loss.item(), global_step)
-            loop.set_postfix(loss=loss.item())
+                logging.info(f"Epoch {epoch} [{i}/{len(loader)}]  loss={loss.item():.4f}")
+                if writer:
+                    writer.add_scalar("train/loss", loss.item(), total_steps)
 
-            global_step += 1
-
+        # ── Checkpoint ────────────────────────────────────
         if is_main_process():
             ckpt = os.path.join(args.ckpt_dir, f"controlnet_epoch{epoch}.pth")
             torch.save(controlnet.module.state_dict(), ckpt)
-            logging.info(f"Saved checkpoint {ckpt}")
+            logging.info(f"Saved checkpoint → {ckpt}")
 
+    if writer:
+        writer.close()
     if is_main_process():
-        logging.info("=== TRAINING COMPLETE ===")
-        tb_writer.close()
+        logging.info("=== Training Complete ===")
 
     cleanup_ddp()
+
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
@@ -178,7 +174,8 @@ if __name__ == "__main__":
     p.add_argument("--lr",               type=float, default=1e-4)
     p.add_argument("--epochs",           type=int, default=10)
     p.add_argument("--ckpt_dir",         type=str,   default="checkpoints")
-    p.add_argument("--tensorboard_dir",  type=str,   default="tensorboard")
+    p.add_argument("--tensorboard_dir",  type=str,   default="tb_logs",
+                                           help="where to write TensorBoard logs")
     args = p.parse_args()
     os.makedirs(args.ckpt_dir, exist_ok=True)
     main(args)
