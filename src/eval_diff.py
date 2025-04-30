@@ -5,6 +5,7 @@ import argparse
 import torch
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+from PIL import Image
 from torch.utils.data import DataLoader
 
 from diffusers import (
@@ -112,7 +113,10 @@ def plot_and_save(pre, post, gen, loss, out_path):
     fig, axs = plt.subplots(1, 3, figsize=(12, 4))
     titles = ["Pre", f"Post\nLoss={loss:.4f}", "Generated"]
     for ax, img, title in zip(axs, [pre, post, gen], titles):
-        ax.imshow(img.permute(1, 2, 0).cpu().numpy())
+        #ax.imshow(img.permute(1, 2, 0).cpu().numpy())
+        # unnormalize from [-1,1] → [0,1]
+        disp = (img * 0.5) + 0.5
+        ax.imshow(disp.permute(1, 2, 0).cpu().numpy())
         ax.set_title(title)
         ax.axis("off")
     fig.tight_layout()
@@ -159,6 +163,21 @@ def main():
     for idx, batch in enumerate(loader):
         if idx >= args.num_samples:
             break
+
+                # — save the full-color pre & post disaster images —
+        post_json = ds.post_jsons[idx]
+        # compute the relative .png path from the JSON path
+        rel     = os.path.relpath(post_json, start=os.path.dirname(ds.post_jsons[0]))
+        png_rel = rel.replace("_post_disaster.json", "_post_disaster.png")
+        # load & save full-res post
+        full_post = Image.open(os.path.join(args.images_dir, png_rel)).convert("RGB")
+        full_post.save(os.path.join(args.out_dir, f"full_post_{idx:03d}.png"))
+        # load & save full-res pre
+        full_pre = Image.open(
+            os.path.join(args.images_dir, png_rel.replace("_post_disaster.png", "_pre_disaster.png"))
+        ).convert("RGB")
+        full_pre.save(os.path.join(args.out_dir, f"full_pre_{idx:03d}.png"))
+
 
         pre = batch["pre"].to(device)  # [B,3,H,W]
         post = batch["post"].to(device)  # [B,3,H,W]

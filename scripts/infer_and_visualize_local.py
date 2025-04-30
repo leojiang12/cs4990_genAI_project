@@ -29,8 +29,14 @@ def load_pipeline(controlnet_ckpt, device="cuda"):
 
     return pipe
 
-def make_severity_map(severity, H, W, device):
-    return torch.full((1,3,H,W), float(severity), device=device)
+def make_severity_map(severity: float, size: int) -> Image.Image:
+    """
+    Return a constant‐gray RGB PIL image of shape (size×size)
+    where each pixel = int(severity * 255).
+    """
+    val = int(severity * 255)
+    arr = np.full((size, size, 3), val, dtype=np.uint8)
+    return Image.fromarray(arr)
 
 def infer_and_plot(pipe, pre_imgs, severities, out_path="results.png"):
     device = pipe.device
