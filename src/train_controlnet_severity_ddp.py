@@ -125,17 +125,25 @@ def main(args):
                                       (B,), device=device)
             noisy     = scheduler.add_noise(latents, noise, timesteps)
 
-            # ControlNet
-            ctrl = controlnet(noisy, timestep=timesteps,
-                              encoder_hidden_states=text_embeds,
-                              controlnet_cond=control_map)
-            down_samples = getattr(ctrl, "down_block_res_samples", ctrl)
-
-            # UNet
-            model_out  = unet(noisy, timestep=timesteps,
-                              encoder_hidden_states=text_embeds,
-                              cross_attention_kwargs={"controlnet": down_samples})
-            model_pred = model_out.sample
+            # ── E) ControlNet forward ─────────────────────
+            ctrl_outputs = controlnet(
+                noisy,
+                timestep=timesteps,
+                encoder_hidden_states=text_embeds,
+                controlnet_cond=control_map,
+            )
+            down_samples = ctrl_outputs.down_block_res_samples    # list of [B,C_i,H,W]
+            mid_sample   = ctrl_outputs.mid_block_res_sample      # tensor [B,C_mid,H,W]
+        
+            # ── F) UNet forward (v2.x signature) ───────────────
+            unet_out = unet(
+                noisy,
+                timestep=timesteps,
+                encoder_hidden_states=text_embeds,
+                down_block_additional_residuals=down_samples,
+                mid_block_additional_residual=mid_sample,
+            )
+            model_pred = unet_out.sample
 
             # loss & step
             loss = torch.nn.functional.mse_loss(model_pred, noise)
