@@ -113,9 +113,13 @@ class XBDPairDataset(Dataset):
         post_t = self.normalize(F.to_tensor(post_crop))
         mask_t = F.to_tensor(mask_crop)
 
+        # compute severity = fraction of damaged pixels
+        severity = mask_t.mean()  # a scalar tensor in [0,1]
+
         return {
             "pre":  pre_t,       # [3,H,W]
             "post": post_t,      # [3,H,W]
             "mask": mask_t,      # [1,H,W]
+            "severity": severity,     # torch.Tensor(1)
             "meta": meta_post,   # raw metadata for post image
         }

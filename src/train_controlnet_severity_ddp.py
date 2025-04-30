@@ -67,6 +67,9 @@ def main(args):
         max_samples=args.max_samples,
         annotate=False
     )
+    if is_main_process():
+        print(f"Dataset samples found: {len(ds)}")
+
     sampler = DistributedSampler(ds, num_replicas=args.world_size, rank=args.rank, shuffle=True)
     loader  = DataLoader(
         ds,
