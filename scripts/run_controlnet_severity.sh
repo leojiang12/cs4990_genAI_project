@@ -5,9 +5,12 @@
 #SBATCH --ntasks-per-node=2            # torchrun --nproc_per_node=2
 #SBATCH --gres=gpu:2                   # request 2 GPUs
 #SBATCH --cpus-per-task=4
-#SBATCH -t 3-00:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=logs/train_%j.log     # %j = job ID
 
+# load conda
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate xbd
 
 # make sure our logs directory exists
 mkdir -p logs checkpoints tensorboard
@@ -17,9 +20,12 @@ LOGFILE=logs/train_$(date +%Y%m%d_%H%M%S).log
 
 echo "========== JOB START $(date) ==========" | tee -a ${LOGFILE}
 
+# launch TensorBoard in background (writes into tensorboard/)
+tensorboard --logdir tensorboard --host 0.0.0.0 &
+TB_PID=$!
 
 # run training
-conda run -n xbd torchrun --nproc_per_node=2 -m src.train_controlnet_severity_ddp \
+torchrun --nproc_per_node=2 -m src.train_controlnet_severity_ddp \
     --labels_dir data/train/labels \
     --images_dir data/train/images \
     --batch_size 2 \
