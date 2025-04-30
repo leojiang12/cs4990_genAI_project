@@ -122,7 +122,7 @@ def main(args):
 
             # e) ControlNet forward
             ctrl_outputs = controlnet(
-                noisy, timesteps=timesteps,
+                noisy, timestep=timesteps,
                 encoder_hidden_states=text_embeds,
                 controlnet_cond=control_map
             )
@@ -132,7 +132,7 @@ def main(args):
             # f) UNet forward
             model_pred = unet(
                 noisy,
-                timesteps=timesteps,
+                timestep=timesteps,
                 encoder_hidden_states=text_embeds,
                 cross_attention_kwargs={"controlnet": down_samples},
             ).sample
