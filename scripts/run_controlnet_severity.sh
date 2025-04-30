@@ -2,7 +2,7 @@
 #SBATCH --job-name=controln
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
-#SBATCH --nodelist=cn01,cn02            # <- force allocation on cn01 only
+#SBATCH --nodelist=cn01            # <- force allocation on cn01 only
 #SBATCH --ntasks-per-node=2
 #SBATCH --gres=gpu:2
 #SBATCH --mem=64G                 # ← request 64 GB of RAM

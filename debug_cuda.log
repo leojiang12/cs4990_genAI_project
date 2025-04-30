@@ -1,0 +1,67 @@
+===== DATE & HOST =====
+Wed Apr 30 14:08:15 PDT 2025
+cn14
+
+===== LOADED MODULES =====
+No Modulefiles Currently Loaded.
+
+===== ENVIRONMENT VARIABLES =====
+CUDA_HOME=/usr/local/cuda
+LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/lib64:
+CONDA_PREFIX=/data03/home/leojiang/miniconda3/envs/xbd
+CUDA_VISIBLE_DEVICES=0,1
+
+===== NVIDIA-SMI =====
+Wed Apr 30 14:08:16 2025       
++---------------------------------------------------------------------------------------+
+| NVIDIA-SMI 530.30.02              Driver Version: 530.30.02    CUDA Version: 12.1     |
+|-----------------------------------------+----------------------+----------------------+
+| GPU  Name                  Persistence-M| Bus-Id        Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp  Perf            Pwr:Usage/Cap|         Memory-Usage | GPU-Util  Compute M. |
+|                                         |                      |               MIG M. |
+|=========================================+======================+======================|
+|   0  Tesla P100-PCIE-16GB            Off| 00000000:08:00.0 Off |                    0 |
+| N/A   22C    P0               26W / 250W|      0MiB / 16384MiB |      0%      Default |
+|                                         |                      |                  N/A |
++-----------------------------------------+----------------------+----------------------+
+|   1  Tesla P100-PCIE-16GB            Off| 00000000:84:00.0 Off |                    0 |
+| N/A   25C    P0               27W / 250W|      0MiB / 16384MiB |      1%      Default |
+|                                         |                      |                  N/A |
++-----------------------------------------+----------------------+----------------------+
+                                                                                         
++---------------------------------------------------------------------------------------+
+| Processes:                                                                            |
+|  GPU   GI   CI        PID   Type   Process name                            GPU Memory |
+|        ID   ID                                                             Usage      |
+|=======================================================================================|
+|  No running processes found                                                           |
++---------------------------------------------------------------------------------------+
+
+===== NVCC (if available) =====
+/usr/local/cuda/bin/nvcc
+nvcc: NVIDIA (R) Cuda compiler driver
+Copyright (c) 2005-2023 NVIDIA Corporation
+Built on Tue_Feb__7_19:32:13_PST_2023
+Cuda compilation tools, release 12.1, V12.1.66
+Build cuda_12.1.r12.1/compiler.32415258_0
+
+===== CONDA cudatoolkit =====
+# packages in environment at /data03/home/leojiang/miniconda3/envs/xbd:
+#
+# Name                    Version                   Build  Channel
+
+===== PYTHON / TORCH / CUDA =====
+/data03/home/leojiang/miniconda3/envs/xbd/lib/python3.9/site-packages/torch/cuda/__init__.py:129: UserWarning: CUDA initialization: CUDA unknown error - this may be due to an incorrectly set up environment, e.g. changing env variable CUDA_VISIBLE_DEVICES after program start. Setting the available devices to be zero. (Triggered internally at /pytorch/c10/cuda/CUDAFunctions.cpp:109.)
+  return torch._C._cuda_getDeviceCount() > 0
+CUDA_VISIBLE_DEVICES: 0,1
+LD_LIBRARY_PATH: /usr/local/cuda/lib64:/usr/local/cuda/lib64:
+CONDA_PREFIX: /data03/home/leojiang/miniconda3/envs/xbd
+Torch version: 2.6.0+cu118
+Torch compiled CUDA: 11.8
+cuda.is_available(): False
+cuda.device_count(): 2
+PyTorch C-library: /data03/home/leojiang/miniconda3/envs/xbd/lib/python3.9/site-packages/torch/_C.cpython-39-x86_64-linux-gnu.so
+ldd on torch._C: 	libtorch_cuda.so => /data03/home/leojiang/miniconda3/envs/xbd/lib/python3.9/site-packages/torch/lib/libtorch_cuda.so (0x00002b54c0c58000)
+	libc10_cuda.so => /data03/home/leojiang/miniconda3/envs/xbd/lib/python3.9/site-packages/torch/lib/libc10_cuda.so (0x00002b54a9eae000)
+	libcudart.so.11.0 => /data03/home/leojiang/miniconda3/envs/xbd/lib/python3.9/site-packages/torch/lib/../../nvidia/cuda_runtime/lib/libcudart.so.11.0 (0x00002b54fab65000)
+	libcupti.so.11.8 => /data03/home/leojiang/miniconda3/envs/xbd/lib/python3.9/site-packages/torch/lib/../../nvidia/cuda_cupti/lib/libcupti.so.11.8 (0x00002b54fbf9e000)
