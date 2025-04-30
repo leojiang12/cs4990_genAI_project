@@ -4,30 +4,25 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=2
 #SBATCH --gres=gpu:2
-#SBATCH -t 3-00:00:00
+#SBATCH --time=12:00:00
 #SBATCH --output=logs/train_%j.log
 #SBATCH --error=logs/train_%j.err
 
 echo "===== JOB START $(date) ====="
 
-# 1) Purge & load the cluster’s CUDA modules:
-module purge
-module load cuda/11.7    # ↳ pick whatever your center uses
-module load cudnn/8.2    # ↳ if required
-
-# 2) Activate your conda env (preserves CUDA_VISIBLE_DEVICES):
+# 1) Activate conda (preserves SLURM's CUDA_VISIBLE_DEVICES)
 source /data03/home/leojiang/miniconda3/etc/profile.d/conda.sh
 conda activate xbd
 
 echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
-echo "Using Python: $(which python)"
-echo "Torch sees $(python - <<<'import torch;print(torch.cuda.device_count())') GPUs"
+echo "Python: $(which python)"
+python - <<<'import torch; print(\"torch.cuda.device_count()=\", torch.cuda.device_count())'
 
-# 3) Prepare TensorBoard logs (only rank 0 will write)
+# 2) Prepare TensorBoard logdir (only rank0 will write to it)
 TB_DIR="${SLURM_SUBMIT_DIR}/tb_logs"
 mkdir -p "$TB_DIR"
 
-# 4) Launch your DDP training directly under the conda env:
+# 3) Launch distributed training
 torchrun --nproc_per_node=2 -m src.train_controlnet_severity_ddp \
     --labels_dir       data/train/labels \
     --images_dir       data/train/images \
