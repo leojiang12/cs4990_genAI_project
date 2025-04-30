@@ -1,30 +1,25 @@
 #!/bin/bash
-#
-#SBATCH --job-name=controlnet_sev
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=2            # torchrun --nproc_per_node=2
-#SBATCH --gres=gpu:2                   # request 2 GPUs
-#SBATCH --cpus-per-task=4
-#SBATCH --time=24:00:00
-#SBATCH --output=logs/train_%j.log     # %j = job ID
+#SBATCH --job-name=controln_sev
+#SBATCH --output=logs/train_%j.log
+#SBATCH --error=logs/train_%j.err
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:2
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
+#SBATCH --time=12:00:00
 
-# load conda
-source /data03/home/leojiang/miniconda3/condabin/conda
+echo "========== JOB START $(date) =========="
+
+# --- load conda and activate env ---
+# adjust this path to your install
+source /data03/home/leojiang/miniconda3/etc/profile.d/conda.sh
 conda activate xbd
 
-# make sure our logs directory exists
-mkdir -p logs checkpoints tensorboard
+# --- start tensorboard in background ---
+mkdir -p tb_logs
+tensorboard --logdir tb_logs --bind_all --port=6006 &
 
-# timestamped logfile
-LOGFILE=logs/train_$(date +%Y%m%d_%H%M%S).log
-
-echo "========== JOB START $(date) ==========" | tee -a ${LOGFILE}
-
-# launch TensorBoard in background (writes into tensorboard/)
-tensorboard --logdir tensorboard --host 0.0.0.0 &
-TB_PID=$!
-
-# run training
+# --- run distributed training ---
 torchrun --nproc_per_node=2 -m src.train_controlnet_severity_ddp \
     --labels_dir data/train/labels \
     --images_dir data/train/images \
@@ -32,10 +27,6 @@ torchrun --nproc_per_node=2 -m src.train_controlnet_severity_ddp \
     --lr 1e-4 \
     --epochs 10 \
     --ckpt_dir checkpoints \
-    --tensorboard_dir tensorboard \
-  2>&1 | tee -a ${LOGFILE}
+    --log_dir tb_logs
 
-echo "========== JOB END   $(date) ==========" | tee -a ${LOGFILE}
-
-# kill tensorboard on exit
-kill ${TB_PID}
+echo "========== JOB  END  $(date) =========="
