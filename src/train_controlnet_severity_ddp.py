@@ -185,8 +185,8 @@ def main(args):
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--labels_dir",       type=str, required=True)
-    p.add_argument("--images_dir",       type=str, required=True)
+    #p.add_argument("--labels_dir",       type=str, required=True)
+    #p.add_argument("--images_dir",       type=str, required=True)
 
     p.add_argument(
         "--data_roots",
