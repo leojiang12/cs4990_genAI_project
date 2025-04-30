@@ -1,41 +1,38 @@
 #!/bin/bash
-#
-#SBATCH --job-name=controlnet_sev
+#SBATCH --job-name=controln
+#SBATCH --partition=gpu
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=2            # torchrun --nproc_per_node=2
-#SBATCH --gres=gpu:2                   # request 2 GPUs
-#SBATCH --cpus-per-task=4
-#SBATCH --time=24:00:00
-#SBATCH --output=logs/train_%j.log     # %j = job ID
+#SBATCH --ntasks-per-node=2
+#SBATCH --gres=gpu:2
+#SBATCH --time=12:00:00
+#SBATCH --output=logs/train_%j.log
+#SBATCH --error=logs/train_%j.err
 
-# load conda
-source /data03/home/leojiang/miniconda3/condabin/conda
-conda activate xbd
+echo "===== JOB START $(date) ====="
 
-# make sure our logs directory exists
-mkdir -p logs checkpoints tensorboard
+# load your conda environment
+source /data03/home/leojiang/miniconda3/etc/profile.d/conda.sh
+# conda activate xbd
 
-# timestamped logfile
-LOGFILE=logs/train_$(date +%Y%m%d_%H%M%S).log
+# ensure TensorBoard log dir exists
+TB_DIR="${SLURM_SUBMIT_DIR}/tb_logs"
+mkdir -p "$TB_DIR"
 
-echo "========== JOB START $(date) ==========" | tee -a ${LOGFILE}
+# launch TensorBoard in the background
+# tensorboard --logdir "$TB_DIR" --host 0.0.0.0 --port 6006 & 
+# TB_PID=$!
 
-# launch TensorBoard in background (writes into tensorboard/)
-tensorboard --logdir tensorboard --host 0.0.0.0 &
-TB_PID=$!
+# run distributed training
+conda run -n xbd torchrun --nproc_per_node=2 -m src.train_controlnet_severity_ddp \
+    --labels_dir    data/train/labels \
+    --images_dir    data/train/images \
+    --batch_size    2 \
+    --lr            1e-4 \
+    --epochs        10 \
+    --ckpt_dir      checkpoints \
+    --tensorboard_dir "$TB_DIR"
 
-# run training
-torchrun --nproc_per_node=2 -m src.train_controlnet_severity_ddp \
-    --labels_dir data/train/labels \
-    --images_dir data/train/images \
-    --batch_size 2 \
-    --lr 1e-4 \
-    --epochs 10 \
-    --ckpt_dir checkpoints \
-    --tensorboard_dir tensorboard \
-  2>&1 | tee -a ${LOGFILE}
+echo "===== JOB END $(date) ====="
 
-echo "========== JOB END   $(date) ==========" | tee -a ${LOGFILE}
-
-# kill tensorboard on exit
-kill ${TB_PID}
+# clean up TensorBoard
+#kill $TB_PID || true
