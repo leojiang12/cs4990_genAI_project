@@ -107,4 +107,20 @@ def main():
         if idx >= args.num_samples: break
 
         pre      = batch["pre"].to(device)                            # [B,3,H,W]
-        post     = batch["
+        post     = batch["post"].to(device)                           # [B,3,H,W]
+        severity = batch["severity"].to(device).unsqueeze(-1)         # [B,1]
+
+        # run your one-step (or full) sampling
+        gen = generate(ctrl, unet, sched, vae, tokenizer, txt_enc,
+                       pre, severity, device)
+
+        # compute pixel-wise MSE between generated & post
+        loss = F.mse_loss(gen, post).item()
+
+        # plot & save
+        out_path = os.path.join(args.out_dir, f"sample_{idx:03d}.png")
+        plot_and_save(pre[0], post[0], gen[0], loss, out_path)
+        print(f"Saved ▶ {out_path}")
+
+if __name__ == "__main__":
+    main()
