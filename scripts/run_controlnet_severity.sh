@@ -2,6 +2,7 @@
 #SBATCH --job-name=controln
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
+#SBATCH --nodelist=cn01            # <- force allocation on cn01 only
 #SBATCH --ntasks-per-node=2
 #SBATCH --gres=gpu:2
 #SBATCH --time=12:00:00
@@ -16,7 +17,7 @@ conda activate xbd
 
 echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 echo "Python: $(which python)"
-python - <<<'import torch; print(\"torch.cuda.device_count()=\", torch.cuda.device_count())'
+python -c "import torch; print('torch.cuda.device_count()=', torch.cuda.device_count())"
 
 # 2) Prepare TensorBoard logdir (only rank0 will write to it)
 TB_DIR="${SLURM_SUBMIT_DIR}/tb_logs"
