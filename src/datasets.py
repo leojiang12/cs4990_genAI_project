@@ -21,17 +21,19 @@ class XBDPairDataset(Dataset):
                  crop_size=512,
                  max_samples=None,
                  annotate=False):
-        # 1) find every post‐disaster PNG under images_dir
-        pattern = os.path.join(images_dir, "**", "*_post_disaster.png")
-        self.post_pngs = sorted(glob.glob(pattern, recursive=True))
-        if max_samples:
-            self.post_pngs = self.post_pngs[:max_samples]
-
         self.labels_dir = labels_dir
         self.images_dir = images_dir
         self.crop_size  = crop_size
         self.annotate   = annotate
-        self.normalize  = T.Normalize([0.5]*3, [0.5]*3)
+
+        # 1) glob **all** post_disaster JSONs, recursively
+        pattern = os.path.join(self.labels_dir, "**", "*_post_disaster.json")
+        self.post_jsons = sorted(glob.glob(pattern, recursive=True))
+        if max_samples:
+            self.post_jsons = self.post_jsons[:max_samples]
+
+        # normalization to [-1,1]
+        self.normalize = T.Normalize([0.5]*3, [0.5]*3)
 
     def __len__(self):
         return len(self.post_pngs)
