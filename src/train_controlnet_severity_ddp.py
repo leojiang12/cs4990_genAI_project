@@ -109,8 +109,14 @@ def main(args):
             post     = batch["post"].to(device)
             severity = batch["severity"].to(device).unsqueeze(-1)
 
-            B, _, H, W = pre.shape
-            control_map = severity.view(B,1,1,1).expand(B,3,H,W)
+            # B, _, H, W = pre.shape
+            # control_map = severity.view(B,1,1,1).expand(B,3,H,W)
+            # ── Use the binary damage mask (not a constant gray) ──
+            # mask: [B,1,H,W], values in {0,1}
+            mask = batch["mask"].to(device)
+            B,_,H,W = mask.shape
+            # replicate to 3 channels so ControlNet (depth‐trained) can consume it
+            control_map = mask.expand(B,3,H,W)
 
             tokens      = tokenizer(["photo"]*B, return_tensors="pt", padding="max_length",
                                     truncation=True, max_length=tokenizer.model_max_length).to(device)
