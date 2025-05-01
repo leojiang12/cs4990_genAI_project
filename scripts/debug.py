@@ -1,123 +1,99 @@
-# src/datasets/xbd_pair.py
+#!/usr/bin/env python3
+"""
+Debug script to inspect dataset globs, JSON pairing, and environment variables
+for XBDPairDataset (recursive) across multiple roots.
+"""
 import os
+import glob
 import json
+import logging
 from pathlib import Path
-from PIL import Image, ImageDraw
-from shapely import wkt
-import torch
-from torch.utils.data import Dataset
-import torchvision.transforms.functional as F
-import torchvision.transforms as T
+from src.datasets import XBDFullDataset  # ← your recursive version
 
-damage_colors = {
-    "no-damage":     (0, 255,   0, 50),
-    "minor-damage":  (0,   0, 255, 50),
-    "major-damage":  (255, 69,   0, 50),
-    "destroyed":     (255,   0,   0, 50),
-    "un-classified": (255, 255, 255, 50),
-}
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s: %(message)s")
 
-def _load_json(path):
-    # try utf-8, fallback to latin-1
-    for enc in ("utf-8", "latin-1"):
+
+def debug_root(root, crop_size, max_samples=None, annotate=False):
+    labels_root = Path(root) / "labels"
+    images_root = Path(root) / "images"
+
+    logging.info(f"--- ROOT: {root} ---")
+    logging.info(f" labels_root exists? {labels_root.exists()}")
+    logging.info(f" images_root exists? {images_root.exists()}")
+
+    # recursive find
+    pngs = sorted(glob.glob(str(images_root / "**" / "*_post_disaster.png"), recursive=True))
+    jsons = sorted(glob.glob(str(labels_root / "**" / "*_post_disaster.json"), recursive=True))
+    logging.info(f" Found {len(pngs)} post_disaster.png files")
+    logging.info(f" Found {len(jsons)} post_disaster.json files")
+
+    # sample missing JSON
+    missing = []
+    for p in pngs[:1000]:
+        rel = os.path.relpath(p, images_root)
+        j   = labels_root / rel.replace(".png", ".json")
+        if not j.exists():
+            missing.append(rel)
+    logging.info(f" Of first {min(1000,len(pngs))} PNGs, {len(missing)} missing JSON (show up to 10):")
+    for r in missing[:10]:
+        logging.info(f"   MISSING JSON → {r}")
+
+    # instantiate and peek
+    ds = XBDFullDataset(
+        labels_root=str(labels_root),
+        images_root=str(images_root),
+        crop_size=crop_size,
+        max_samples=max_samples,
+        annotate=annotate,
+    )
+    logging.info(f" XBDFullDataset length = {len(ds)}")
+
+    # try to read first few items, catching JSON errors
+    good = 0
+    for idx in range(min(5, len(ds))):
         try:
-            with open(path, "r", encoding=enc) as f:
-                return json.load(f)
-        except UnicodeDecodeError:
-            continue
-    raise UnicodeDecodeError(f"Could not decode JSON: {path}")
-
-class XBDFullDataset(Dataset):
-    """
-    Recursively collects all *_post_disaster.json under labels_root,
-    pairs with their pre/post PNGs under images_root, crops and normalizes.
-    """
-
-    def __init__(
-        self,
-        labels_root: str,
-        images_root: str,
-        crop_size: int = 512,
-        max_samples: int = None,
-        annotate: bool = False,
-    ):
-        self.labels_root = Path(labels_root)
-        self.images_root = Path(images_root)
-        self.crop_size = crop_size
-        self.annotate = annotate
-        self.normalize = T.Normalize([0.5]*3, [0.5]*3)
-
-        # build list of (json, post_png, pre_png)
-        self.items = []
-        for post_json in self.labels_root.rglob("*_post_disaster.json"):
-            rel = post_json.relative_to(self.labels_root)
-            post_png = (self.images_root / rel).with_suffix(".png")
-            pre_png = post_png.with_name(
-                post_png.name.replace("_post_disaster.png", "_pre_disaster.png")
+            item = ds[idx]
+            logging.info(
+                f"  idx={idx}: pre.shape={item['pre'].shape}, "
+                f"post.shape={item['post'].shape}, "
+                f"mask.sum={item['mask'].sum():.4f}, "
+                f"severity={item['severity']:.4f}"
             )
-            if post_png.exists() and pre_png.exists():
-                self.items.append((str(post_json), str(post_png), str(pre_png)))
-        if max_samples:
-            self.items = self.items[:max_samples]
+            good += 1
+        except UnicodeDecodeError as e:
+            logging.error(f"  idx={idx}: failed to decode JSON for sample—skipping: {e}")
+        except Exception as e:
+            logging.error(f"  idx={idx}: unexpected error loading sample—skipping: {e}")
 
-    def __len__(self):
-        return len(self.items)
+    if good == 0:
+        logging.warning("  No valid samples could be read from this root!")
 
-    def __getitem__(self, idx):
-        post_json, post_png, pre_png = self.items[idx]
+    return len(ds)
 
-        # 1) load metadata + features, with encoding fallback
-        data = _load_json(post_json)
-        meta = data.get("metadata", {})
-        feats = data.get("features", {})
-        coords = feats.get("xy", []) if isinstance(feats, dict) else []
 
-        # 2) load images
-        post_img = Image.open(post_png).convert("RGB")
-        pre_img = Image.open(pre_png).convert("RGB")
+def main():
+    import argparse
+    p = argparse.ArgumentParser()
+    p.add_argument("--data_roots", type=str, required=True,
+                   help="Comma-separated roots: data/train,data/tier3,data/test")
+    p.add_argument("--crop_size",  type=int, default=512)
+    p.add_argument("--max_samples",type=int, default=None)
+    p.add_argument("--annotate",   action="store_true")
+    args = p.parse_args()
 
-        # 3) rasterize mask
-        mask = Image.new("L", post_img.size, 0)
-        draw = ImageDraw.Draw(mask)
-        for feat in coords:
-            poly = wkt.loads(feat["wkt"])
-            pts = list(zip(poly.exterior.coords.xy[0], poly.exterior.coords.xy[1]))
-            draw.polygon(pts, fill=1)
-        del draw
+    # ENV
+    logging.info(
+        f"ENV VARS: RANK={os.environ.get('RANK')}, "
+        f"WORLD_SIZE={os.environ.get('WORLD_SIZE')}, "
+        f"LOCAL_RANK={os.environ.get('LOCAL_RANK')}"
+    )
 
-        # 4) optional annotation overlay
-        if self.annotate:
-            ad = ImageDraw.Draw(pre_img, "RGBA")
-            bd = ImageDraw.Draw(post_img, "RGBA")
-            for feat in coords:
-                sub = feat.get("properties", {}).get("subtype", "no-damage")
-                col = damage_colors.get(sub, damage_colors["no-damage"])
-                poly = wkt.loads(feat["wkt"])
-                pts = list(zip(poly.exterior.coords.xy[0], poly.exterior.coords.xy[1]))
-                ad.polygon(pts, col)
-                bd.polygon(pts, col)
-            del ad, bd
+    roots = [r.strip() for r in args.data_roots.split(",") if r.strip()]
+    total = 0
+    for root in roots:
+        total += debug_root(root, args.crop_size, args.max_samples, args.annotate)
+    logging.info(f"=== GRAND TOTAL across {roots}: {total} ===")
 
-        # 5) joint random crop
-        i, j, h, w = T.RandomCrop.get_params(
-            pre_img, (self.crop_size, self.crop_size)
-        )
-        pre_crop = F.crop(pre_img, i, j, h, w)
-        post_crop = F.crop(post_img, i, j, h, w)
-        mask_crop = F.crop(mask, i, j, h, w)
 
-        # 6) to-tensor + normalize
-        pre_t = self.normalize(F.to_tensor(pre_crop))
-        post_t = self.normalize(F.to_tensor(post_crop))
-        mask_t = F.to_tensor(mask_crop)
-
-        # 7) severity
-        severity = mask_t.mean()
-
-        return {
-            "pre": pre_t,          # [3,H,W]
-            "post": post_t,        # [3,H,W]
-            "mask": mask_t,        # [1,H,W]
-            "severity": severity,  # scalar
-            "meta": meta,          # dict
-        }
+if __name__ == "__main__":
+    main()
