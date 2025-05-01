@@ -19,7 +19,7 @@ from diffusers import (
 )
 from transformers import CLIPTextModel, CLIPTokenizer
 
-from src.datasets.xbd_full_dataset import XBDFullDataset  # <-- switched to recursive version
+from src.datasets import XBDFullDataset  # <-- switched to recursive version
 
 
 def setup_ddp(args):
