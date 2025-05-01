@@ -6,7 +6,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:1
 #SBATCH --mem=64G                 # ← request 64 GB of RAM
-#SBATCH --t 21-00:00:00
+#SBATCH -t 21-00:00:00
 #SBATCH --output=logs/sd_control_train_%j.log
 #SBATCH --error=logs/sd_control_train_%j.err
 
