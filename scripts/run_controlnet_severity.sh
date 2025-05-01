@@ -3,12 +3,12 @@
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --nodelist=cn01            # <- force allocation on cn01 only
-#SBATCH --ntasks-per-node=2
-#SBATCH --gres=gpu:2
+#SBATCH --ntasks-per-node=1
+#SBATCH --gres=gpu:1
 #SBATCH --mem=64G                 # ← request 64 GB of RAM
-#SBATCH --time=12:00:00
-#SBATCH --output=logs/train_%j.log
-#SBATCH --error=logs/train_%j.err
+#SBATCH --t 21-00:00:00
+#SBATCH --output=logs/sd_control_train_%j.log
+#SBATCH --error=logs/sd_control_train_%j.err
 
 echo "===== JOB START $(date) ====="
 
@@ -25,13 +25,9 @@ TB_DIR="${SLURM_SUBMIT_DIR}/tb_logs"
 mkdir -p "$TB_DIR"
 
 # 3) Launch distributed training
-torchrun --nproc_per_node=2 -m src.train_controlnet_severity_ddp \
-    --labels_dir       data/train/labels \
-    --images_dir       data/train/images \
-    --batch_size       2 \
-    --lr               1e-4 \
-    --epochs           10 \
-    --ckpt_dir         checkpoints \
-    --tensorboard_dir  "$TB_DIR"
+torchrun --nproc_per_node=1 -m src.train_controlnet_severity_ddp \
+  --data_roots data/train,data/tier3,data/test \
+  --crop_size 512 --batch_size 2 --lr 1e-4 --epochs 50 \
+  --ckpt_dir checkpoints --tensorboard_dir tb_logs
 
 echo "===== JOB END $(date) ====="
