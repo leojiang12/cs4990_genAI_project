@@ -16,18 +16,18 @@ damage_colors = {
 
 class XBDPairDataset(Dataset):
     def __init__(self,
-                 labels_dir,     # e.g. "data/train/labels"
-                 images_dir,     # e.g. "data/train/images"
-                 crop_size=512,
-                 max_samples=None,
-                 annotate=False):
-        self.labels_dir = labels_dir
-        self.images_dir = images_dir
+                 labels_dir: str,    # e.g. "data/train/labels"
+                 images_dir: str,    # e.g. "data/train/images"
+                 crop_size: int = 512,
+                 max_samples: int = None,
+                 annotate: bool = False):
+        self.labels_dir = Path(labels_dir)
+        self.images_dir = Path(images_dir)
         self.crop_size  = crop_size
         self.annotate   = annotate
 
-        # 1) glob **all** post_disaster JSONs, recursively
-        pattern = os.path.join(self.labels_dir, "**", "*_post_disaster.json")
+        # 1) glob all post-disaster JSONs recursively
+        pattern = str(self.labels_dir / "**" / "*_post_disaster.json")
         self.post_jsons = sorted(glob.glob(pattern, recursive=True))
         if max_samples:
             self.post_jsons = self.post_jsons[:max_samples]
@@ -36,25 +36,35 @@ class XBDPairDataset(Dataset):
         self.normalize = T.Normalize([0.5]*3, [0.5]*3)
 
     def __len__(self):
-        return len(self.post_pngs)
+        return len(self.post_jsons)
 
     def __getitem__(self, idx):
-        # 2) full-res post PNG
-        post_png = self.post_pngs[idx]
+        post_json = self.post_jsons[idx]
 
-        # 3) derive matching JSON (if missing → no damage)
-        rel      = os.path.relpath(post_png, self.images_dir)
-        post_json = os.path.join(self.labels_dir, rel.replace(".png", ".json"))
-        if os.path.exists(post_json):
-            pd    = json.load(open(post_json))
-            feats = pd.get("features", {}).get("xy", [])
-            meta  = pd.get("metadata", {})
-        else:
-            feats = []
-            meta  = {}
+        # helper to load JSON with fallback encoding
+        def load_json(path):
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except UnicodeDecodeError:
+                with open(path, 'r', encoding='latin-1') as f:
+                    return json.load(f)
 
-        # 4) load pre/post
-        pre_png  = post_png.replace("_post_disaster.png", "_pre_disaster.png")
+        # 2) derive matching PNG paths
+        rel = Path(post_json).relative_to(self.labels_dir)
+        post_png = self.images_dir / rel.with_suffix(".png").name.replace(
+            "_post_disaster.json", "_post_disaster.png"
+        )
+        pre_png = Path(str(post_png)).with_name(
+            post_png.name.replace("_post_disaster.png", "_pre_disaster.png")
+        )
+
+        # 3) load metadata + features
+        data = load_json(post_json)
+        feats = data.get("features", {}).get("xy", [])
+        meta  = data.get("metadata", {})
+
+        # 4) open images
         post_img = Image.open(post_png).convert("RGB")
         pre_img  = Image.open(pre_png).convert("RGB")
 
@@ -62,7 +72,7 @@ class XBDPairDataset(Dataset):
         mask = Image.new("L", post_img.size, 0)
         draw = ImageDraw.Draw(mask)
         for f in feats:
-            poly   = wkt.loads(f["wkt"])
+            poly = wkt.loads(f["wkt"])
             coords = list(zip(poly.exterior.coords.xy[0], poly.exterior.coords.xy[1]))
             draw.polygon(coords, fill=1)
         del draw
@@ -72,7 +82,7 @@ class XBDPairDataset(Dataset):
             ad = ImageDraw.Draw(pre_img,  "RGBA")
             bd = ImageDraw.Draw(post_img, "RGBA")
             for f in feats:
-                sub   = f.get("properties",{}).get("subtype","no-damage")
+                sub   = f.get("properties", {}).get("subtype", "no-damage")
                 col   = damage_colors.get(sub, damage_colors["no-damage"])
                 poly  = wkt.loads(f["wkt"])
                 coords= list(zip(poly.exterior.coords.xy[0], poly.exterior.coords.xy[1]))
@@ -81,8 +91,7 @@ class XBDPairDataset(Dataset):
             del ad, bd
 
         # 7) joint random crop
-        i, j, h, w = T.RandomCrop.get_params(pre_img,
-                                             (self.crop_size, self.crop_size))
+        i, j, h, w = T.RandomCrop.get_params(pre_img, (self.crop_size, self.crop_size))
         pre_c  = F.crop(pre_img,  i, j, h, w)
         post_c = F.crop(post_img, i, j, h, w)
         mask_c = F.crop(mask,    i, j, h, w)
