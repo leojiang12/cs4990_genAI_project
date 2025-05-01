@@ -8,7 +8,7 @@ import glob
 import json
 import logging
 from pathlib import Path
-from src.datasets import XBDFullDataset  # <-- same recursive dataset
+from src.datasets import XBDFullDataset  # ← your recursive version
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s: %(message)s")
 
@@ -47,14 +47,27 @@ def debug_root(root, crop_size, max_samples=None, annotate=False):
         annotate=annotate,
     )
     logging.info(f" XBDFullDataset length = {len(ds)}")
+
+    # try to read first few items, catching JSON errors
+    good = 0
     for idx in range(min(5, len(ds))):
-        item = ds[idx]
-        logging.info(
-            f"  idx={idx}: pre.shape={item['pre'].shape}, "
-            f"post.shape={item['post'].shape}, "
-            f"mask.sum={item['mask'].sum():.4f}, "
-            f"severity={item['severity']:.4f}"
-        )
+        try:
+            item = ds[idx]
+            logging.info(
+                f"  idx={idx}: pre.shape={item['pre'].shape}, "
+                f"post.shape={item['post'].shape}, "
+                f"mask.sum={item['mask'].sum():.4f}, "
+                f"severity={item['severity']:.4f}"
+            )
+            good += 1
+        except UnicodeDecodeError as e:
+            logging.error(f"  idx={idx}: failed to decode JSON for sample—skipping: {e}")
+        except Exception as e:
+            logging.error(f"  idx={idx}: unexpected error loading sample—skipping: {e}")
+
+    if good == 0:
+        logging.warning("  No valid samples could be read from this root!")
+
     return len(ds)
 
 
