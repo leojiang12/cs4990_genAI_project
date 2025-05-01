@@ -104,8 +104,7 @@ class XBDPairDataset(Dataset):
         }
 
 from pathlib import Path
-import os, json
-torch
+import os, json, torch
 from torch.utils.data import Dataset
 from PIL import Image, ImageDraw
 from shapely import wkt
