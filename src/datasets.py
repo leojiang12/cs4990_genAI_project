@@ -131,13 +131,26 @@ damage_colors = {
 }
 
 def _load_json(path: Path):
-    # Try UTF-8 first, then Latin-1 if that fails
+    """
+    Load JSON from `path`, falling back encodings and
+    returning an empty dict on parse errors.
+    """
+    text = None
     for enc in ("utf-8", "latin-1"):
         try:
-            return json.loads(path.read_text(encoding=enc))
-        except UnicodeDecodeError:
+            text = path.read_text(encoding=enc)
+            break
+        except (UnicodeDecodeError, IOError):
             continue
-    raise UnicodeDecodeError(f"Could not decode JSON at {path!r}")
+    if text is None:
+        # couldn't even read the file
+        return {}
+
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        # empty or invalid JSON → treat as no labels
+        return {}
 
 class XBDFullDataset(Dataset):
     """
