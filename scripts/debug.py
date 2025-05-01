@@ -8,7 +8,7 @@ import glob
 import json
 import logging
 from pathlib import Path
-from src.datasets.xbd_full_dataset import XBDFullDataset  # <-- same recursive dataset
+from src.datasets import XBDFullDataset  # <-- same recursive dataset
 
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s: %(message)s")
 
