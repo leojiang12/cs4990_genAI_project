@@ -19,7 +19,7 @@ from diffusers import (
 )
 from transformers import CLIPTextModel, CLIPTokenizer
 
-from src.datasets import XBDPairDataset
+from src.datasets.xbd_full_dataset import XBDFullDataset  # <-- switched to recursive version
 
 
 def setup_ddp(args):
@@ -49,7 +49,6 @@ def main(args):
         format="[%(asctime)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-
     setup_ddp(args)
     device = torch.device(f"cuda:{args.local_rank}")
 
@@ -68,25 +67,23 @@ def main(args):
 
     controlnet = DDP(controlnet, device_ids=[args.local_rank], output_device=args.local_rank)
 
-    # ── 2) Dataset & Dataloader (merged across multiple roots) ───
-    roots = [r.strip() for r in args.data_roots.split(",") if r.strip()]
-    all_ds = []
+    # ── 2) Dataset & Dataloader ────────────────────────
+    roots  = [r.strip() for r in args.data_roots.split(",") if r.strip()]
+    parts  = []
     for root in roots:
-        lbl = os.path.join(root, "labels")
-        img = os.path.join(root, "images")
-        all_ds.append(
-            XBDPairDataset(
-                labels_dir=lbl,
-                images_dir=img,
-                crop_size=args.crop_size,
-                max_samples=args.max_samples,
-                annotate=False,
-            )
-        )
-    ds = ConcatDataset(all_ds)
-
+        logging.info(f"Building XBDFullDataset for {root}")
+        parts.append(XBDFullDataset(
+            labels_root = os.path.join(root, "labels"),
+            images_root = os.path.join(root, "images"),
+            crop_size   = args.crop_size,
+            max_samples = args.max_samples,
+            annotate    = False,
+        ))
+        logging.info(f"  → {len(parts[-1])} samples in {root}")
+    ds = ConcatDataset(parts)
+    total = len(ds)
     if is_main_process():
-        logging.info(f"Total samples across {roots}: {len(ds)}")
+        logging.info(f"Total concatenated samples: {total}")
 
     sampler = DistributedSampler(ds, num_replicas=args.world_size, rank=args.rank, shuffle=True)
     loader  = DataLoader(ds, batch_size=args.batch_size, sampler=sampler,
@@ -107,8 +104,7 @@ def main(args):
     for epoch in range(1, args.epochs + 1):
         sampler.set_epoch(epoch)
         loop = tqdm(loader, desc=f"Epoch [{epoch}/{args.epochs}]", disable=not is_main_process())
-
-        for i, batch in enumerate(loop, 1):
+        for batch in loop:
             pre      = batch["pre"].to(device)
             post     = batch["post"].to(device)
             severity = batch["severity"].to(device).unsqueeze(-1)
@@ -116,10 +112,9 @@ def main(args):
             B, _, H, W = pre.shape
             control_map = severity.view(B,1,1,1).expand(B,3,H,W)
 
-            prompts    = ["photo"] * B
-            tokens     = tokenizer(prompts, return_tensors="pt", padding="max_length",
-                                   truncation=True, max_length=tokenizer.model_max_length).to(device)
-            text_embeds= text_encoder(**tokens).last_hidden_state
+            tokens      = tokenizer(["photo"]*B, return_tensors="pt", padding="max_length",
+                                    truncation=True, max_length=tokenizer.model_max_length).to(device)
+            text_embeds = text_encoder(**tokens).last_hidden_state
 
             with torch.no_grad():
                 latents = vae.encode(post).latent_dist.sample() * vae.config.scaling_factor
@@ -127,26 +122,25 @@ def main(args):
             timesteps = torch.randint(0, scheduler.config.num_train_timesteps, (B,), device=device)
             noisy     = scheduler.add_noise(latents, noise, timesteps)
 
-            ctrl_out  = controlnet(noisy, timestep=timesteps,
-                                   encoder_hidden_states=text_embeds,
-                                   controlnet_cond=control_map)
-            down_samps= ctrl_out.down_block_res_samples
-            mid_samp  = ctrl_out.mid_block_res_sample
+            ctrl_out    = controlnet(noisy, timestep=timesteps,
+                                     encoder_hidden_states=text_embeds,
+                                     controlnet_cond=control_map)
+            down_samps  = ctrl_out.down_block_res_samples
+            mid_samp    = ctrl_out.mid_block_res_sample
 
-            unet_out  = unet(noisy, timestep=timesteps,
-                             encoder_hidden_states=text_embeds,
-                             down_block_additional_residuals=down_samps,
-                             mid_block_additional_residual=mid_samp)
-            pred      = unet_out.sample
+            unet_out    = unet(noisy, timestep=timesteps,
+                               encoder_hidden_states=text_embeds,
+                               down_block_additional_residuals=down_samps,
+                               mid_block_additional_residual=mid_samp)
+            pred        = unet_out.sample
 
             loss = torch.nn.functional.mse_loss(pred, noise)
             optimizer.zero_grad(); loss.backward(); optimizer.step()
 
             total_steps += 1
             loop.set_postfix(loss=f"{loss:.4f}")
-            if is_main_process():
-                if writer:
-                    writer.add_scalar("train/loss", loss.item(), total_steps)
+            if is_main_process() and writer:
+                writer.add_scalar("train/loss", loss.item(), total_steps)
 
         if is_main_process():
             ckpt = os.path.join(args.ckpt_dir, f"controlnet_epoch{epoch}.pth")
@@ -160,14 +154,10 @@ def main(args):
     cleanup_ddp()
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument(
-        "--data_roots",
-        type=str,
-        required=True,
-        help="Comma-separated roots: data/train,data/tier3,data/test"
-    )
+    p.add_argument("--data_roots",      type=str,   required=True,
+                   help="Comma-separated roots: data/train,data/tier3,data/test")
     p.add_argument("--crop_size",       type=int,   default=512)
     p.add_argument("--max_samples",     type=int,   default=None)
     p.add_argument("--batch_size",      type=int,   default=4)
