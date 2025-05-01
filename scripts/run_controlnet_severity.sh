@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --nodelist=cn01            # <- force allocation on cn01 only
 #SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:2
 #SBATCH --mem=64G                 # ← request 64 GB of RAM
 #SBATCH -t 21-00:00:00
 #SBATCH --output=logs/sd_control_train_%j.log
