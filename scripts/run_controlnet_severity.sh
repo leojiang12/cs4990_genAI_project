@@ -5,7 +5,7 @@
 #SBATCH --nodelist=cn01            # force onto cn01
 #SBATCH --ntasks-per-node=1
 #SBATCH --gres=gpu:1
-#SBATCH --mem=64G
+#SBATCH --mem=32G
 #SBATCH -t 21-00:00:00
 #SBATCH --output=logs/sd_control_train_%j.log
 #SBATCH --error=logs/sd_control_train_%j.err
