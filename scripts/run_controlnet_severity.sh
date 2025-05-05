@@ -2,9 +2,8 @@
 #SBATCH --job-name=controln
 #SBATCH --partition=gpu
 #SBATCH --nodes=1
-#SBATCH --nodelist=cn02            # force onto cn01
-#SBATCH --ntasks-per-node=2
-#SBATCH --gres=gpu:2
+#SBATCH --ntasks-per-node=1
+#SBATCH --gres=gpu:1
 #SBATCH --mem=64G
 #SBATCH -t 21-00:00:00
 #SBATCH --output=logs/sd_control_train_%j.log
