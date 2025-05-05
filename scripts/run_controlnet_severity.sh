@@ -24,7 +24,7 @@ TB_DIR="${SLURM_SUBMIT_DIR}/tb_logs"
 mkdir -p "$TB_DIR"
 
 # 3) Train
-torchrun --nproc_per_node=1 -m src.train_controlnet_severity_ddp \
+torchrun --nproc_per_node=2 -m src.train_controlnet_severity_ddp \
   --data_roots data/train,data/tier3,data/test \
   --crop_size 512 --batch_size 2 --lr 1e-4 --epochs 15 \
   --ckpt_dir checkpoints --tensorboard_dir "$TB_DIR"
