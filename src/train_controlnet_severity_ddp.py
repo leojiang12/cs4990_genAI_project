@@ -8,6 +8,7 @@ import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader, DistributedSampler, ConcatDataset
+import torch.cuda.amp as amp
 from torch.optim import AdamW
 from torch.utils.tensorboard import SummaryWriter
 
@@ -77,6 +78,13 @@ def main(args):
     for p in text_encoder.parameters():  p.requires_grad = False
     for p in controlnet.parameters():    p.requires_grad = True
 
+    # ——— memory savers ————————————————————————————————————
+    # Mixed precision + gradient checkpointing + attention slicing
+    unet.enable_attention_slicing()
+    controlnet.enable_attention_slicing()
+    unet.enable_gradient_checkpointing()
+    controlnet.enable_gradient_checkpointing()
+
     controlnet = DDP(controlnet, device_ids=[local_rank], output_device=local_rank)
 
     # ── 2) build concatenated dataset ──────────────────────
@@ -111,31 +119,16 @@ def main(args):
     start_epoch = 1
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device)
-        # new-format resume?
         if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
+            # full checkpoint
             controlnet.module.load_state_dict(ckpt["model_state_dict"])
-            # Move all Adam buffers to CPU first, to avoid OOM
-            optim_sd = ckpt["optim_state_dict"]
-            for s in optim_sd["state"].values():
-                for k,v in list(s.items()):
-                    if isinstance(v, torch.Tensor):
-                        s[k] = v.cpu()
             start_epoch = ckpt.get("epoch", 0) + 1
-            if is_main(rank):
-                logging.info(f"Resumed from {args.resume} at epoch {start_epoch}")
         else:
-            # old-format (raw state_dict)
+            # legacy raw ControlNet state_dict
             controlnet.module.load_state_dict(ckpt)
-            # try to parse epoch from filename: controlnet_epoch{N}.pth
             m = re.search(r"epoch(\d+)\.pth$", args.resume)
             if m:
                 start_epoch = int(m.group(1)) + 1
-                if is_main(rank):
-                    logging.info(f"Loaded legacy checkpoint, starting at epoch {start_epoch}")
-            else:
-                if is_main(rank):
-                    logging.info(f"Loaded legacy checkpoint, but couldn't infer epoch—starting at 1")
-
     # ── 4) train loop ─────────────────────────────────────
     total_steps = 0
     for epoch in range(start_epoch, args.epochs + 1):
