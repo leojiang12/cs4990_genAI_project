@@ -80,10 +80,10 @@ def main(args):
 
     # ——— memory savers ————————————————————————————————————
     # Mixed precision + gradient checkpointing + attention slicing
-    unet.enable_attention_slicing()
-    controlnet.enable_attention_slicing()
-    unet.enable_gradient_checkpointing()
-    controlnet.enable_gradient_checkpointing()
+    # unet.enable_attention_slicing()
+    # controlnet.enable_attention_slicing()
+    # unet.enable_gradient_checkpointing()
+    # controlnet.enable_gradient_checkpointing()
 
     controlnet = DDP(controlnet, device_ids=[local_rank], output_device=local_rank)
 
