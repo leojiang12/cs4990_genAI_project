@@ -137,13 +137,61 @@ def main(args):
             B,_,H,W = mask.shape
             control_map = mask.expand(B,3,H,W)
 
-            tokens      = tokenizer(
-                                ["photo"]*B,
+            # build a per‑sample prompt from metadata
+            prompts = []
+            for i, m in enumerate(batch["meta"]):
+                # geography
+                lnglat = m.get("features",{}).get("lng_lat", [])
+                if lnglat:
+                    # take first coordinate pair
+                    coords = lnglat[0].get("properties",{})
+                    loc = f"{coords.get('lng', '0'):.2f}E,{coords.get('lat','0'):.2f}N"
+                else:
+                    loc = "unknown location"
+
+                # disaster context
+                disaster      = m.get("metadata",{}).get("disaster", "")
+                disaster_type = m.get("metadata",{}).get("disaster_type", "")
+
+                # imaging conditions
+                sun_el        = m.get("metadata",{}).get("sun_elevation", None)
+                off_nadir     = m.get("metadata",{}).get("off_nadir_angle", None)
+                gsd           = m.get("metadata",{}).get("gsd", None)
+
+                feats = m.get("features",{}).get("xy", [])
+                if feats:
+                    subtype = feats[0].get("properties",{}).get("subtype","no-damage")
+                else:
+                    subtype = "no-damage"
+
+                # and the numeric severity you already compute:
+                sev = batch["severity"][i].item()  # between 0 and 1
+
+                # capture date
+                date = m.get("metadata",{}).get("capture_date", "").split("T")[0]
+
+                # assemble
+                p = f"{disaster_type or disaster} aftermath in {loc}"
+                if date:
+                    p += f", on {date}"
+                if subtype and sev>0:
+                    p += f", {subtype.replace('-',' ')} ({sev*100:.0f}% area)"
+
+                if sun_el is not None:
+                    p += f", sunny angle {sun_el:.1f}°"
+                if off_nadir is not None:
+                    p += f", off‑nadir {off_nadir:.1f}°"
+                if gsd is not None:
+                    p += f", {gsd:.2f} m/px resolution"
+
+                prompts.append(p)
+
+            tokens = tokenizer(prompts,
                                 return_tensors="pt",
                                 padding="max_length",
                                 truncation=True,
                                 max_length=tokenizer.model_max_length
-                            ).to(device)
+                                ).to(device)
             text_embeds = text_encoder(**tokens).last_hidden_state
 
             with torch.no_grad():

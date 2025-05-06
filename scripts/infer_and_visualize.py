@@ -56,7 +56,7 @@ def load_pipeline(controlnet_ckpt, device="cuda"):
     return pipe
 
 
-def infer_and_plot(pipe, pre_imgs, masks, severities, out_path="severity_sweep.png"):
+def infer_and_plot(pipe, pre_imgs, masks, metas, severities, out_path="severity_sweep.png"):
     device = pipe.device
     B      = len(pre_imgs)
 
@@ -68,16 +68,32 @@ def infer_and_plot(pipe, pre_imgs, masks, severities, out_path="severity_sweep.p
         pil_pre.append(Image.fromarray(arr))
         toks_pre.append(torch.from_numpy(arr.transpose(2,0,1)/255.0))
 
-    # Precompute CLIP embeddings for “photo”
-    prompts = ["photo"] * B
-    tok = pipe.tokenizer(
-        prompts,
-        return_tensors="pt",
-        padding="max_length",
-        truncation=True,
-        max_length=pipe.tokenizer.model_max_length
-    ).to(device)
-    txt_emb = pipe.text_encoder(**tok).last_hidden_state
+    # ---- build a rich prompt from each sample's metadata ----
+    prompts = []
+    for m in metas:
+        # location
+        lnglat = m.get("features",{}).get("lng_lat", [])
+        if lnglat:
+            coords = lnglat[0]["properties"]
+            loc = f"{coords.get('lng'):.2f}E,{coords.get('lat'):.2f}N"
+        else:
+            loc = "unknown location"
+
+        # disaster fields
+        dmeta = m.get("metadata",{})
+        dtype = dmeta.get("disaster_type", dmeta.get("disaster",""))
+        date  = dmeta.get("capture_date","").split("T")[0]
+        sun   = dmeta.get("sun_elevation", None)
+        off   = dmeta.get("off_nadir_angle", None)
+        gsd   = dmeta.get("gsd", None)
+
+        p = f"{dtype} aftermath in {loc}"
+        if date: p += f", on {date}"
+        if sun:  p += f", sunny {sun:.1f}°"
+        if off:  p += f", off‑nadir {off:.1f}°"
+        if gsd:  p += f", {gsd:.2f} m/px"
+        prompts.append(p)
+    # -----------------------------------------------------------
 
     all_rows = []
     for i in range(B):
@@ -85,19 +101,17 @@ def infer_and_plot(pipe, pre_imgs, masks, severities, out_path="severity_sweep.p
         m   = masks[i].float().to(device)
 
         for sev in severities:
-            # build a single‐channel PIL mask
             mask_arr = (m * sev * 255).byte().cpu().numpy().squeeze(0)
             pil_mask = Image.fromarray(mask_arr).convert("L")
 
             if sev == 0.0:
-                # at zero severity, just show the original
                 gen = toks_pre[i]
             else:
                 out = pipe(
-                    prompt="photo",
-                    init_image=[pil_pre[i]],                     # ← use init_image
-                    controlnet_conditioning_image=[pil_mask],     # ← same as before
-                    strength=1.0 - sev,
+                    prompt=prompts[i],
+                    init_image=[pil_pre[i]],
+                    controlnet_conditioning_image=[pil_mask],
+                    strength=1.0 - sev,           # ← sev here
                     num_inference_steps=30,
                     guidance_scale=7.5,
                 ).images[0]
@@ -108,16 +122,15 @@ def infer_and_plot(pipe, pre_imgs, masks, severities, out_path="severity_sweep.p
 
         all_rows.extend(row)
 
-    grid = make_grid(
-        torch.stack(all_rows, dim=0),
-        nrow=1 + len(severities),
-        pad_value=1.0
-    )
+    grid = make_grid(torch.stack(all_rows, dim=0),
+                     nrow=1 + len(severities),
+                     pad_value=1.0)
     plt.figure(figsize=((1+len(severities))*3, B*3))
     plt.imshow(grid.permute(1,2,0).cpu().numpy())
     plt.axis("off")
     plt.savefig(out_path, bbox_inches="tight")
     print(f"Saved severity sweep → {out_path}")
+
 
 
 if __name__=="__main__":
@@ -157,6 +170,7 @@ if __name__=="__main__":
 
     pre_imgs = [ ds[i]["pre"]  for i in indices ]
     masks    = [ ds[i]["mask"] for i in indices ]
+    metas    = [ ds[i]["meta"] for i in indices ]
     sev_list = [float(x) for x in args.severities.split(",")]
 
-    infer_and_plot(pipe, pre_imgs, masks, sev_list, out_path=args.out)
+    infer_and_plot(pipe, pre_imgs, masks, metas, sev_list, out_path=args.out)
