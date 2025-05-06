@@ -177,7 +177,6 @@ def main(args):
             torch.save({
                 "epoch":            epoch,
                 "model_state_dict": controlnet.module.state_dict(),
-                "optim_state_dict": optimizer.state_dict(),
             }, out_ckpt)
             logging.info(f"Checkpoint → {out_ckpt}")
 
