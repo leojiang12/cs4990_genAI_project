@@ -60,7 +60,7 @@ def infer_and_plot(pipe, pre_imgs, masks, severities, out_path="severity_sweep.p
     device = pipe.device
     B      = len(pre_imgs)
 
-    # Convert to PIL & keep tensors for grid
+    # Convert to PIL & keep tensor versions for the grid
     pil_pre, toks_pre = [], []
     for t in pre_imgs:
         arr = ((t * 0.5 + 0.5) * 255).clamp(0,255).byte().cpu().numpy()
@@ -68,7 +68,7 @@ def infer_and_plot(pipe, pre_imgs, masks, severities, out_path="severity_sweep.p
         pil_pre.append(Image.fromarray(arr))
         toks_pre.append(torch.from_numpy(arr.transpose(2,0,1)/255.0))
 
-    # Precompute CLIP embeddings for “photo”
+    # Precompute CLIP text‑embeddings for “photo”
     prompts = ["photo"] * B
     tok      = pipe.tokenizer(
                    prompts,
@@ -81,22 +81,23 @@ def infer_and_plot(pipe, pre_imgs, masks, severities, out_path="severity_sweep.p
 
     all_rows = []
     for i in range(B):
-        row = [toks_pre[i]]  # original image
+        row = [toks_pre[i]]
         m   = masks[i].float().to(device)
 
         for sev in severities:
-            # build 1‑channel PIL mask
+            # build a single‑channel PIL mask
             mask_arr = (m * sev * 255).byte().cpu().numpy().squeeze(0)
             pil_mask = Image.fromarray(mask_arr).convert("L")
 
             if sev == 0.0:
+                # no-change case
                 gen = toks_pre[i]
             else:
                 out = pipe(
                     prompt="photo",
-                    init_image=pil_pre[i],
-                    control_image=pil_mask,
-                    strength=1.0 - sev,       # 1.0=no change, 0.0=full repaint
+                    image=[pil_pre[i]],                           # <--- wrap in list
+                    controlnet_conditioning_image=[pil_mask],      # <--- wrap in list
+                    strength=1.0 - sev,                           # 1.0 = identity, 0.0 = full repaint
                     num_inference_steps=30,
                     guidance_scale=7.5,
                 ).images[0]
@@ -107,7 +108,6 @@ def infer_and_plot(pipe, pre_imgs, masks, severities, out_path="severity_sweep.p
 
         all_rows.extend(row)
 
-    # make grid
     grid = make_grid(
         torch.stack(all_rows, dim=0),
         nrow=1 + len(severities),
@@ -131,7 +131,7 @@ if __name__=="__main__":
                         help="how many examples to visualize")
     parser.add_argument("--severities",  type=str,
                         default="0.0,0.25,0.5,0.75,1.0",
-                        help="comma-separated severity levels")
+                        help="comma‑separated severity levels")
     parser.add_argument("--random_sample", action="store_true",
                         help="randomly pick samples")
     parser.add_argument("--out",         default="results.png")
@@ -152,13 +152,11 @@ if __name__=="__main__":
         raise RuntimeError("No samples found in " + args.data_root)
 
     M = min(args.max_samples, N)
-    if args.random_sample:
-        indices = random.sample(range(N), M)
-    else:
-        indices = list(range(M))
+    indices = (random.sample(range(N), M)
+               if args.random_sample else list(range(M)))
 
     pre_imgs = [ ds[i]["pre"]  for i in indices ]
     masks    = [ ds[i]["mask"] for i in indices ]
-
     sev_list = [float(x) for x in args.severities.split(",")]
+
     infer_and_plot(pipe, pre_imgs, masks, sev_list, out_path=args.out)
