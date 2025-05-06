@@ -45,11 +45,13 @@ def is_main_process():
 
 
 def main(args):
+    # ── Logging setup ───────────────────────────────────
     logging.basicConfig(
         level=logging.INFO,
         format="[%(asctime)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+
     setup_ddp(args)
     device = torch.device(f"cuda:{args.local_rank}")
 
@@ -78,49 +80,52 @@ def main(args):
 
     controlnet = DDP(controlnet, device_ids=[args.local_rank], output_device=args.local_rank)
 
-    # ── 2) Dataset & DataLoader ───────────────────────
+    # ── 2) Dataset & Dataloader ────────────────────────
     roots = [r.strip() for r in args.data_roots.split(",") if r.strip()]
     parts = []
     for root in roots:
-        logging.info(f"Loading dataset from {root}")
-        parts.append(XBDFullDataset(
+        logging.info(f"Building XBDFullDataset for {root}")
+        ds_part = XBDFullDataset(
             labels_root = os.path.join(root, "labels"),
             images_root = os.path.join(root, "images"),
             crop_size   = args.crop_size,
             max_samples = args.max_samples,
             annotate    = False,
-        ))
+        )
+        parts.append(ds_part)
+        logging.info(f"  → {len(ds_part)} samples in {root}")
     ds = ConcatDataset(parts)
-    sampler = DistributedSampler(ds, num_replicas=args.world_size, rank=args.rank, shuffle=True)
-    loader  = DataLoader(ds, batch_size=args.batch_size,
-                         sampler=sampler, num_workers=4, pin_memory=True)
+    total = len(ds)
     if is_main_process():
-        logging.info(f"Total samples: {len(ds)}")
+        logging.info(f"Total concatenated samples: {total}")
 
-    # ── 3) TensorBoard (only rank 0) ───────────────────
+    sampler = DistributedSampler(ds, num_replicas=args.world_size, rank=args.rank, shuffle=True)
+    loader  = DataLoader(ds, batch_size=args.batch_size, sampler=sampler,
+                         num_workers=4, pin_memory=True)
+
+    # ── 3) TensorBoard ──────────────────────────────────
     writer = None
     if is_main_process() and args.tensorboard_dir:
         os.makedirs(args.tensorboard_dir, exist_ok=True)
         writer = SummaryWriter(log_dir=args.tensorboard_dir)
-        logging.info(f"TensorBoard → {args.tensorboard_dir}")
+        logging.info(f"TensorBoard logs → {args.tensorboard_dir}")
 
-    # ── 4) Optimizer & (optionally) resume ─────────────
+    # ── 4) Optimizer & optional resume ──────────────────
     optimizer   = AdamW(controlnet.parameters(), lr=args.lr)
     start_epoch = 1
     if args.resume:
-        # load model weights into CPU memory only
         ckpt = torch.load(args.resume, map_location="cpu")
         model_sd = ckpt.get("model_state_dict", ckpt)
         controlnet.module.load_state_dict(model_sd)
-        # infer next epoch
+        # parse epoch number if available
         m = re.search(r"epoch(\d+)\.pth$", args.resume)
         if m:
             start_epoch = int(m.group(1)) + 1
         if is_main_process():
-            logging.info(f"Resumed from {args.resume}, starting at epoch {start_epoch}")
+            logging.info(f"Resumed from {args.resume} → continuing at epoch {start_epoch}")
         del ckpt, model_sd  # free CPU RAM
 
-    # ── 5) Training loop ───────────────────────────────
+    # ── 5) Training Loop ────────────────────────────────
     total_steps = 0
     for epoch in range(start_epoch, args.epochs + 1):
         sampler.set_epoch(epoch)
@@ -128,9 +133,9 @@ def main(args):
         for batch in loop:
             pre  = batch["pre"].to(device)
             post = batch["post"].to(device)
-            mask = batch["mask"].to(device)  # [B,1,H,W]
+            mask = batch["mask"].to(device)       # [B,1,H,W]
             B,_,H,W = mask.shape
-            control = mask.expand(B,3,H,W)
+            control_map = mask.expand(B,3,H,W)
 
             tokens      = tokenizer(
                                 ["photo"]*B,
@@ -143,50 +148,50 @@ def main(args):
 
             with torch.no_grad():
                 latents = vae.encode(post).latent_dist.sample() * vae.config.scaling_factor
-            noise     = torch.randn_like(latents)
-            tsteps    = torch.randint(0, scheduler.config.num_train_timesteps, (B,), device=device)
-            noisy     = scheduler.add_noise(latents, noise, tsteps)
+            noise  = torch.randn_like(latents)
+            tsteps = torch.randint(0, scheduler.config.num_train_timesteps, (B,), device=device)
+            noisy  = scheduler.add_noise(latents, noise, tsteps)
 
             ctrl_out   = controlnet(noisy, timestep=tsteps,
                                     encoder_hidden_states=text_embeds,
-                                    controlnet_cond=control)
-            down, mid  = ctrl_out.down_block_res_samples, ctrl_out.mid_block_res_sample
+                                    controlnet_cond=control_map)
+            down_samps = ctrl_out.down_block_res_samples
+            mid_samp   = ctrl_out.mid_block_res_sample
 
             unet_out = unet(
                 noisy, timestep=tsteps,
                 encoder_hidden_states=text_embeds,
-                down_block_additional_residuals=down,
-                mid_block_additional_residual=mid
+                down_block_additional_residuals=down_samps,
+                mid_block_additional_residual=mid_samp
             )
             pred = unet_out.sample
 
             loss = torch.nn.functional.mse_loss(pred, noise)
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            optimizer.zero_grad(); loss.backward(); optimizer.step()
 
             total_steps += 1
-            if is_main_process():
+            loop.set_postfix(loss=f"{loss:.4f}")
+            if is_main_process() and writer:
                 writer.add_scalar("train/loss", loss.item(), total_steps)
-                loop.set_postfix(loss=f"{loss.item():.4f}")
 
-        # ── save checkpoint (only rank 0) ───────────────
+        # ── Checkpoint ────────────────────────────────────
         if is_main_process():
-            out = os.path.join(args.ckpt_dir, f"controlnet_epoch{epoch}.pth")
-            torch.save({"epoch": epoch, "model_state_dict": controlnet.module.state_dict()}, out)
-            logging.info(f"Checkpoint → {out}")
+            ckpt_path = os.path.join(args.ckpt_dir, f"controlnet_epoch{epoch}.pth")
+            torch.save(controlnet.module.state_dict(), ckpt_path)
+            logging.info(f"Saved checkpoint → {ckpt_path}")
 
     if writer:
         writer.close()
     if is_main_process():
         logging.info("=== Training Complete ===")
+
     cleanup_ddp()
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--data_roots",      required=True,
-                   help="Comma-separated roots, e.g. data/train,data/tier3,data/test")
+    p.add_argument("--data_roots",      type=str, required=True,
+                   help="Comma-separated roots: data/train,data/tier3,data/test")
     p.add_argument("--crop_size",       type=int, default=512)
     p.add_argument("--max_samples",     type=int, default=None)
     p.add_argument("--batch_size",      type=int, default=4)
@@ -195,7 +200,7 @@ if __name__ == "__main__":
     p.add_argument("--ckpt_dir",        type=str,   default="checkpoints")
     p.add_argument("--tensorboard_dir", type=str,   default="tb_logs")
     p.add_argument("--resume",          type=str,   default=None,
-                   help="path to a ControlNet checkpoint (.pth) to resume from")
+                   help="path to ControlNet .pth checkpoint to resume from")
     args = p.parse_args()
 
     os.makedirs(args.ckpt_dir, exist_ok=True)

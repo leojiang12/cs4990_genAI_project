@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=controln-resume
-#SBATCH --partition=gpu          # still on GPU partition
+#SBATCH --partition=gpu
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=2
-#SBATCH --cpus-per-task=4        # for DataLoader workers
+#SBATCH --cpus-per-task=4
 #SBATCH --gres=gpu:2
-#SBATCH --mem-per-cpu=8G         # 8 GB × 8 CPUs = 64 GB total
+#SBATCH --mem-per-cpu=8G
 #SBATCH --time=21-00:00:00
 #SBATCH --output=logs/sd_control_train_resume_%j.log
 #SBATCH --error=logs/sd_control_train_resume_%j.err
@@ -31,7 +31,7 @@ else
     RESUME_ARG=""
 fi
 
-# 3) Make TensorBoard dir
+# 3) TensorBoard logs
 TB_DIR="${SLURM_SUBMIT_DIR}/tb_logs"
 mkdir -p "$TB_DIR"
 
