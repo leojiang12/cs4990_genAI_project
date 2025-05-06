@@ -87,6 +87,8 @@ def infer_and_plot(pipe, pre_imgs, masks, metas, severities, out_path="severity_
         prompts.append(prompt)
 
     all_rows = []
+    N = 30
+    tgt_steps = N
     for i in range(B):
         row = [toks_pre[i]]
         for sev in severities:
@@ -96,12 +98,19 @@ def infer_and_plot(pipe, pre_imgs, masks, metas, severities, out_path="severity_
                 mask_arr = (masks[i].float() * sev * 255).byte().cpu().numpy().squeeze(0)
                 pil_mask = Image.fromarray(mask_arr).convert("L")
 
+                base_strength = 1.0 - sev
+                if base_strength <= 0.0:
+                    # at least one denoising step
+                    strength = 1.0 / 30.0
+                else:
+                    strength = base_strength
+
                 out = pipe(
                     prompt=prompts[i],
                     image=[pil_pre[i]],
                     control_image=[pil_mask],
-                    strength=1.0 - sev,
-                    num_inference_steps=30,
+                    strength=strength,
+                    num_inference_steps=tgt_steps,
                     guidance_scale=7.5,
                 ).images[0]
 
