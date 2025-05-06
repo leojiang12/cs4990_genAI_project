@@ -72,29 +72,30 @@ def infer_and_plot(pipe, pre_imgs, masks, severities, out_path="severity_sweep.p
 
     all_rows = []
     for i in range(B):
-        # Start each row with the pre‑disaster image
         row = [toks_pre[i]]
-
-        # For each severity, build a float mask and run the pipeline
-        m = masks[i].float().to(device)  # [1,H,W] in {0,1}
+        m = masks[i].float().to(device)
         for sev in severities:
-            # build a PIL grayscale mask whose pixel‐values=sev
-            mask_float = (m * sev * 255).byte().cpu().numpy().squeeze(0)
-            rgb = np.stack([mask_float]*3, axis=-1)
-            pil_mask = Image.fromarray(rgb)
+            # build a proper single‑channel PIL mask
+            mask_arr = (m * sev * 255).byte().cpu().numpy().squeeze(0)
+            pil_mask = Image.fromarray(mask_arr).convert("L")
 
-            # generate
-            out = pipe(
-                prompt_embeds=txt_emb[i:i+1],
-                image=[pil_pre[i]],
-                controlnet_conditioning_image=[pil_mask],
-                num_inference_steps=30,
-                guidance_scale=7.5,
-            ).images[0]
+            if sev == 0.0:
+                # do not run the model at zero severity → just show the input
+                gen = toks_pre[i]
+            else:
+                # now call the new API
+                out = pipe(
+                    prompt="photo",
+                    init_image=pil_pre[i],
+                    control_image=pil_mask,
+                    strength=1.0 - sev,           # 1.0 = exact copy, 0.0 = full repaint
+                    num_inference_steps=30,
+                    guidance_scale=7.5,
+                ).images[0]
+                arr = np.array(out)
+                gen = torch.from_numpy(arr.transpose(2,0,1)/255.0)
 
-            # convert generated PIL→tensor
-            arr = np.array(out)
-            row.append(torch.from_numpy(arr.transpose(2,0,1)/255.0))
+            row.append(gen)
 
         all_rows.extend(row)
 
