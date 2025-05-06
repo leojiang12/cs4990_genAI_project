@@ -1,3 +1,50 @@
+#!/usr/bin/env python3
+import os
+import sys
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+from PIL import Image
+from torchvision.utils import make_grid
+
+# ensure src/ is on your PYTHONPATH
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
+from diffusers import (
+    AutoencoderKL,
+    UNet2DConditionModel,
+    ControlNetModel,
+    StableDiffusionControlNetPipeline,
+    DDPMScheduler,
+)
+from transformers import CLIPTextModel, CLIPTokenizer
+from src.datasets import XBDFullDataset  
+
+
+def load_pipeline(controlnet_ckpt, device="cuda"):
+    vae       = AutoencoderKL.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="vae").to(device)
+    tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
+    text_enc  = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14").to(device)
+    unet      = UNet2DConditionModel.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="unet").to(device)
+    scheduler = DDPMScheduler.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="scheduler")
+    ctrl_net  = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-depth").to(device)
+    ctrl_net.load_state_dict(torch.load(controlnet_ckpt, map_location=device))
+    ctrl_net.requires_grad_(False)
+
+    pipe = StableDiffusionControlNetPipeline(
+        vae=vae,
+        text_encoder=text_enc,
+        tokenizer=tokenizer,
+        unet=unet,
+        controlnet=ctrl_net,
+        scheduler=scheduler,
+        safety_checker=None,
+        feature_extractor=None,
+    ).to(device)
+    pipe.enable_model_cpu_offload()
+    return pipe
+
+
 def infer_and_plot(pipe, pre_imgs, masks, out_path="severity_sweep.png"):
     """
     pre_imgs: list of [3×H×W] tensors in [-1,1]
@@ -60,3 +107,33 @@ def infer_and_plot(pipe, pre_imgs, masks, out_path="severity_sweep.png"):
     plt.axis("off")
     plt.savefig(out_path, bbox_inches="tight")
     print(f"Saved severity sweep to {out_path}")
+
+
+if __name__=="__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--ckpt",       required=True,
+                        help="path to ControlNet .pth checkpoint")
+    parser.add_argument("--data_root",  required=True,
+                        help="root of your dataset (labels/ & images/)")
+    parser.add_argument("--max_samples",type=int, default=4,
+                        help="how many examples to visualize")
+    parser.add_argument("--out",        default="results.png")
+    args = parser.parse_args()
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    pipe   = load_pipeline(args.ckpt, device)
+
+    ds = XBDFullDataset(
+        labels_root = os.path.join(args.data_root,"labels"),
+        images_root = os.path.join(args.data_root,"images"),
+        crop_size   = 512,
+        max_samples = args.max_samples,
+        annotate    = False,
+    )
+    if len(ds)==0:
+        raise RuntimeError("No samples found")
+
+    pre_imgs = [ ds[i]["pre"]  for i in range(len(ds)) ]
+    masks    = [ ds[i]["mask"] for i in range(len(ds)) ]
+    infer_and_plot(pipe, pre_imgs, masks, out_path=args.out)
