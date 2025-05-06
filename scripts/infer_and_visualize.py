@@ -59,129 +59,85 @@ def load_pipeline(controlnet_ckpt, device="cuda"):
 
 
 def infer_and_plot(pipe, pre_imgs, masks, metas, severities, out_path="severity_sweep.png"):
+    """
+    pipe:           StableDiffusionControlNetImg2ImgPipeline
+    pre_imgs:       list of [3,H,W] tensors in [-1..1]
+    masks:          list of [1,H,W] float⊂[0,1]
+    metas:          list of metadata dicts
+    severities:     list of floats e.g. [0.0, 0.25, …, 1.0]
+    """
     B = len(pre_imgs)
     K = len(severities)
-    
-    logging.info(f"Running inference on {B} samples with severities={severities}")
 
-    # convert everything to PIL + keep a tensor copy for final grid
-    pil_pre, toks_pre = [], []
+    # — Convert pre_imgs once to PIL
+    pil_pres = []
     for t in pre_imgs:
         arr = ((t * 0.5 + 0.5) * 255).clamp(0,255).byte().cpu().numpy()
-        arr = arr.transpose(1,2,0)
-        pil_pre.append(Image.fromarray(arr))
-        toks_pre.append(torch.from_numpy(arr.transpose(2,0,1)/255.0))
+        pil_pres.append(Image.fromarray(arr.transpose(1,2,0)))
 
-    # build simple prompts from metadata
-    prompts = []
-    for m in metas:
-        d = m.get("metadata", {})
-        dtype = d.get("disaster_type", d.get("disaster",""))
-        loc = "unknown"
-        ll = m.get("features",{}).get("lng_lat",[])
-        if ll:
-            p = ll[0].get("properties",{})
-            loc = f"{p.get('lng',0):.2f}E,{p.get('lat',0):.2f}N"
-        date = d.get("capture_date","").split("T")[0]
-        prompt = f"{dtype} aftermath in {loc}"
-        if date:
-            prompt += f", on {date}"
-        prompts.append(prompt)
-
-    # now set up a grid of axes
-    fig, axes = plt.subplots(
-        nrows=B+1, ncols=K+1,
-        figsize=((K+1)*3, (B+1)*3),
-        gridspec_kw={"wspace":0, "hspace":0},
-    )
-
-    # 1) Header row: severities
-    axes[0][0].axis("off")
-    for j, sev in enumerate(severities):
-        ax = axes[0][j+1]
-        ax.axis("off")
-        ax.set_title(f"{sev:.2f}", pad=4)
-
-    all_rows = []
-    N = 30
-    # for i in range(B):
-    #     row = [toks_pre[i]]
-    #     for sev in severities:
-    #         if sev == 0.0:
-    #             gen = toks_pre[i]
-    #         else:
-    #             mask_arr = (masks[i].float() * sev * 255).byte().cpu().numpy().squeeze(0)
-    #             pil_mask = Image.fromarray(mask_arr).convert("L")
-
-    #             strength = sev
-
-    #             out = pipe(
-    #                 prompt=prompts[i],
-    #                 image=[pil_pre[i]],
-    #                 control_image=[pil_mask],
-    #                 strength=strength,
-    #                 num_inference_steps=N, # more steps → crisper output
-    #                 guidance_scale=10.0, # stronger adherence to your mask
-    #             ).images[0]
-
-    #             arr = np.array(out)
-    #             gen = torch.from_numpy(arr.transpose(2,0,1)/255.0)
-
-    #         row.append(gen)
-
-    #     all_rows.extend(row)
-
-    # grid = make_grid(torch.stack(all_rows, dim=0),
-    #                  nrow=1 + len(severities),
-    #                  pad_value=1.0)
-    # plt.figure(figsize=((1+len(severities))*3, B*3))
-    # plt.imshow(grid.permute(1,2,0).cpu().numpy())
-    # plt.axis("off")
-    # plt.savefig(out_path, bbox_inches="tight")
-    # 2) For each sample i…
-    for i in range(B):
-        # a) Left‑column label (metadata)
-        loc = "unknown"
-        ll = metas[i].get("features",{}).get("lng_lat",[])
+    # — Build textual labels
+    def make_label(meta):
+        dt = meta.get("metadata",{}).get("disaster_type","")
+        ll = meta.get("features",{}).get("lng_lat",[])
         if ll:
             p = ll[0]["properties"]
-            loc = f"{p.get('lng',0):.2f}E, {p.get('lat',0):.2f}N"
-        dtype = metas[i].get("metadata",{}).get("disaster_type","")
-        label = f"{dtype}\n{loc}"
+            loc = f"{p.get('lng',0):.2f}E,{p.get('lat',0):.2f}N"
+        else:
+            loc = "unknown"
+        return f"{dt}\n{loc}"
 
-        lbl_ax = axes[i+1][0]
-        lbl_ax.axis("off")
-        lbl_ax.text(
-            0.5, 0.5, label,
-            ha="center", va="center", fontsize=10
-        )
+    labels = [make_label(m) for m in metas]
 
-        # b) The 0.0‑severity “identity” image
-        axes[i+1][1].imshow(pil_pre[i])
-        axes[i+1][1].axis("off")
+    # — Quick helper: given idx i, severity s → run the network
+    def generate(i, s):
+        mask_arr = (masks[i] * s * 255).byte().cpu().numpy().squeeze()
+        control = Image.fromarray(mask_arr).convert("L")
+        out = pipe(
+            prompt   = f"{labels[i].splitlines()[0]} aftermath",  # or reuse your real prompt list
+            image    = [pil_pres[i]],
+            control_image = [control],
+            strength = s,
+            num_inference_steps = 30,
+            guidance_scale = 7.5,
+        ).images[0]
+        return out
 
-        # c) The rest of the severities
-        for j, sev in enumerate(severities[1:], start=2):
-            # run your ControlNet call …
-            mask_arr = (masks[i].float() * severities[j-1] * 255)\
-                           .byte().cpu().numpy().squeeze(0)
-            pil_mask = Image.fromarray(mask_arr).convert("L")
+    # — Layout the grid
+    fig, axes = plt.subplots(
+        nrows = B+1, ncols = K+1,
+        figsize = ((K+1)*2.5, (B+1)*2.5),
+        gridspec_kw = {"wspace":0.1, "hspace":0.1},
+    )
 
-            out = pipe(
-                prompt=prompts[i],
-                image=[pil_pre[i]],
-                control_image=[pil_mask],
-                strength=severities[j-1],
-                num_inference_steps=30,
-                guidance_scale=7.5,
-            ).images[0]
+    # Header row
+    axes[0,0].axis("off")
+    for j, s in enumerate(severities, start=1):
+        ax = axes[0,j]
+        ax.axis("off")
+        ax.set_title(f"{s:.2f}", pad=4)
 
-            ax = axes[i+1][j]
-            ax.imshow(out)
+    # Fill in each sample row
+    for i in range(B):
+        # metadata label in col 0
+        ax = axes[i+1,0]
+        ax.axis("off")
+        ax.text(0.5, 0.5, labels[i],
+                ha="center", va="center", fontsize=9)
+
+        # col 1: severity = 0 “identity”
+        ax = axes[i+1,1]
+        ax.imshow(pil_pres[i])
+        ax.axis("off")
+
+        # cols 2…K+1: generated
+        for j, s in enumerate(severities[1:], start=2):
+            img = generate(i, s)
+            ax = axes[i+1,j]
+            ax.imshow(img)
             ax.axis("off")
 
     plt.tight_layout()
-    plt.savefig(out_path, bbox_inches="tight")
+    fig.savefig(out_path, bbox_inches="tight")
     plt.close(fig)
 
     logging.info(f"Saved severity sweep → {out_path}")
