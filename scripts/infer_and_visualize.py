@@ -23,12 +23,22 @@ from src.datasets import XBDFullDataset
 
 
 def load_pipeline(controlnet_ckpt, device="cuda"):
-    vae       = AutoencoderKL.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="vae").to(device)
+    vae       = AutoencoderKL.from_pretrained(
+                    "runwayml/stable-diffusion-v1-5", subfolder="vae"
+                ).to(device)
     tokenizer = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-    text_enc  = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14").to(device)
-    unet      = UNet2DConditionModel.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="unet").to(device)
-    scheduler = DDPMScheduler.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="scheduler")
-    ctrl_net  = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-depth").to(device)
+    text_enc  = CLIPTextModel.from_pretrained(
+                    "openai/clip-vit-large-patch14"
+                ).to(device)
+    unet      = UNet2DConditionModel.from_pretrained(
+                    "runwayml/stable-diffusion-v1-5", subfolder="unet"
+                ).to(device)
+    scheduler = DDPMScheduler.from_pretrained(
+                    "runwayml/stable-diffusion-v1-5", subfolder="scheduler"
+                )
+    ctrl_net  = ControlNetModel.from_pretrained(
+                    "lllyasviel/sd-controlnet-depth"
+                ).to(device)
     ctrl_net.load_state_dict(torch.load(controlnet_ckpt, map_location=device))
     ctrl_net.requires_grad_(False)
 
@@ -63,32 +73,26 @@ def infer_and_plot(pipe, pre_imgs, masks, severities, out_path="severity_sweep.p
         pil_pre.append(Image.fromarray(arr))
         toks_pre.append(torch.from_numpy(arr.transpose(2,0,1)/255.0))
 
-    # Precompute CLIP text‑embeddings for “photo”
-    prompts = ["photo"] * B
-    tokens  = pipe.tokenizer(prompts, return_tensors="pt",
-                              padding="max_length", truncation=True,
-                              max_length=pipe.tokenizer.model_max_length).to(device)
-    txt_emb = pipe.text_encoder(**tokens).last_hidden_state
-
     all_rows = []
     for i in range(B):
         row = [toks_pre[i]]
-        m = masks[i].float().to(device)
+        m   = masks[i].float().to(device)
+
         for sev in severities:
             # build a proper single‑channel PIL mask
             mask_arr = (m * sev * 255).byte().cpu().numpy().squeeze(0)
             pil_mask = Image.fromarray(mask_arr).convert("L")
 
             if sev == 0.0:
-                # do not run the model at zero severity → just show the input
+                # at zero severity, just echo the original
                 gen = toks_pre[i]
             else:
-                # now call the new API
+                # call img2img+ControlNet with fading strength
                 out = pipe(
                     prompt="photo",
                     init_image=pil_pre[i],
                     control_image=pil_mask,
-                    strength=1.0 - sev,           # 1.0 = exact copy, 0.0 = full repaint
+                    strength=1.0 - sev,      # 1.0 = copy input, 0.0 = full repaint
                     num_inference_steps=30,
                     guidance_scale=7.5,
                 ).images[0]
@@ -99,10 +103,12 @@ def infer_and_plot(pipe, pre_imgs, masks, severities, out_path="severity_sweep.p
 
         all_rows.extend(row)
 
-    # make a big grid: B rows, 1 + len(severities) cols
-    grid = make_grid(torch.stack(all_rows, dim=0),
-                     nrow=1 + len(severities),
-                     pad_value=1.0)
+    # assemble grid: B rows × (1 + len(severities)) columns
+    grid = make_grid(
+        torch.stack(all_rows, dim=0),
+        nrow=1 + len(severities),
+        pad_value=1.0
+    )
 
     plt.figure(figsize=((1+len(severities))*3, B*3))
     plt.imshow(grid.permute(1,2,0).cpu().numpy())
@@ -131,24 +137,22 @@ if __name__=="__main__":
     device = "cuda" if torch.cuda.is_available() else "cpu"
     pipe   = load_pipeline(args.ckpt, device)
 
-    # build dataset
+    # load dataset
     ds = XBDFullDataset(
         labels_root = os.path.join(args.data_root,"labels"),
         images_root = os.path.join(args.data_root,"images"),
         crop_size   = 512,
-        max_samples = None,           # we’ll do our own sampling
+        max_samples = None,
         annotate    = False,
     )
     N = len(ds)
     if N == 0:
         raise RuntimeError("No samples found in " + args.data_root)
 
-    # select indices
+    # pick which samples
     M = min(args.max_samples, N)
-    if args.random_sample:
-        indices = random.sample(range(N), M)
-    else:
-        indices = list(range(M))
+    indices = (random.sample(range(N), M) if args.random_sample
+               else list(range(M)))
 
     pre_imgs = [ ds[i]["pre"]  for i in indices ]
     masks    = [ ds[i]["mask"] for i in indices ]
