@@ -112,7 +112,7 @@ def infer_and_plot(pipe, pre_imgs, masks, metas, severities, out_path="severity_
                 try:
                     out = pipe(
                         prompt=prompts[i],
-                        init_image=[pil_pre[i]],
+                        image=[pil_pre[i]],
                         controlnet_conditioning_image=[pil_mask],
                         strength=1.0 - sev,
                         num_inference_steps=30,
