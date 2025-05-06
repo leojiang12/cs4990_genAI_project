@@ -36,7 +36,7 @@ echo "===== TRAINING COMPLETE $(date) ====="
 CKPT="checkpoints/controlnet_epoch15.pth"
 OUT_IMG="logs/posttrain_inference_${SLURM_JOB_ID}.png"
 
-python scripts/infer_and_visualize_.py \
+python scripts/infer_and_visualize.py \
   --ckpt "$CKPT" \
   --data_root data/hold \
   --max_samples 4 \

@@ -137,9 +137,15 @@ def main(args):
             B,_,H,W = mask.shape
             control_map = mask.expand(B,3,H,W)
 
+            raw_meta = batch["meta"]               # e.g. {'sensor': [...], 'capture_date': [...], …}
+            batch_meta = [
+                { k: raw_meta[k][i] for k in raw_meta }
+                for i in range(B)
+            ]
+
             # build a per‑sample prompt from metadata
             prompts = []
-            for i, m in enumerate(batch["meta"]):
+            for i, m in enumerate(batch_meta):
                 # geography
                 lnglat = m.get("features",{}).get("lng_lat", [])
                 if lnglat:
