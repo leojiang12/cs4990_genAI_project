@@ -165,6 +165,9 @@ def main(args):
             logging.info(f"Resumed from {args.resume} → continuing at epoch {start_epoch}")
         del ckpt, model_sd  # free CPU RAM
 
+    # make sure run_name is a safe filesystem prefix
+    run_name = args.run_name.strip().replace(" ", "_")
+
     # ── 5) Training Loop ────────────────────────────────
     total_steps = 0
     for epoch in range(start_epoch, args.epochs + 1):
@@ -305,7 +308,9 @@ def main(args):
 
         # ── Checkpoint ────────────────────────────────────
         if is_main_process():
-            ckpt_path = os.path.join(args.ckpt_dir, f"controlnet_epoch{epoch}.pth")
+           # use run_name as prefix if provided, else fall back
+            fname = f"{run_name + '_' if run_name else ''}epoch{epoch}.pth"
+            ckpt_path = os.path.join(args.ckpt_dir, fname)
             torch.save(controlnet.module.state_dict(), ckpt_path)
             logging.info(f"Saved checkpoint → {ckpt_path}")
 
@@ -330,6 +335,8 @@ if __name__ == "__main__":
     p.add_argument("--tensorboard_dir", type=str,   default="tb_logs")
     p.add_argument("--resume",          type=str,   default=None,
                    help="path to ControlNet .pth checkpoint to resume from")
+    p.add_argument("--run_name",        type=str,   default="",
+                   help="experiment name prefix for checkpoints / TB logs")
     p.add_argument("--val_root",        type=str,   required=True,
                    help="root of your *test* (validation) split")
     p.add_argument("--seed",           type=int,   default=42,
