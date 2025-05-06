@@ -19,28 +19,29 @@ from diffusers import (
 )
 from transformers import CLIPTextModel, CLIPTokenizer
 
-from src.datasets import XBDFullDataset  # <-- switched to recursive version
+from src.datasets import XBDFullDataset
 
 
-def setup_ddp(args):
-    args.rank       = int(os.environ["RANK"])
-    args.world_size = int(os.environ["WORLD_SIZE"])
-    args.local_rank = int(os.environ["LOCAL_RANK"])
-    torch.cuda.set_device(args.local_rank)
+def setup_ddp():
+    rank       = int(os.environ["RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+    local_rank = int(os.environ["LOCAL_RANK"])
+    torch.cuda.set_device(local_rank)
     dist.init_process_group(
         backend="nccl",
         init_method="env://",
-        world_size=args.world_size,
-        rank=args.rank
+        world_size=world_size,
+        rank=rank,
     )
+    return rank, world_size, local_rank
 
 
 def cleanup_ddp():
     dist.destroy_process_group()
 
 
-def is_main_process():
-    return dist.get_rank() == 0
+def is_main(rank):
+    return rank == 0
 
 
 def main(args):
@@ -49,29 +50,39 @@ def main(args):
         format="[%(asctime)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
-    setup_ddp(args)
-    device = torch.device(f"cuda:{args.local_rank}")
 
-    # ── 1) Load & freeze models ────────────────────────
-    vae          = AutoencoderKL.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="vae").to(device)
+    rank, world_size, local_rank = setup_ddp()
+    device = torch.device(f"cuda:{local_rank}")
+
+    # ── 1) load & freeze all but ControlNet ─────────────────
+    vae          = AutoencoderKL.from_pretrained(
+                        "runwayml/stable-diffusion-v1-5", subfolder="vae"
+                   ).to(device)
     tokenizer    = CLIPTokenizer.from_pretrained("openai/clip-vit-large-patch14")
-    text_encoder = CLIPTextModel.from_pretrained("openai/clip-vit-large-patch14").to(device)
-    unet         = UNet2DConditionModel.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="unet").to(device)
-    controlnet   = ControlNetModel.from_pretrained("lllyasviel/sd-controlnet-depth").to(device)
-    scheduler    = DDPMScheduler.from_pretrained("runwayml/stable-diffusion-v1-5", subfolder="scheduler")
+    text_encoder = CLIPTextModel.from_pretrained(
+                        "openai/clip-vit-large-patch14"
+                   ).to(device)
+    unet         = UNet2DConditionModel.from_pretrained(
+                        "runwayml/stable-diffusion-v1-5", subfolder="unet"
+                   ).to(device)
+    controlnet   = ControlNetModel.from_pretrained(
+                        "lllyasviel/sd-controlnet-depth"
+                   ).to(device)
+    scheduler    = DDPMScheduler.from_pretrained(
+                        "runwayml/stable-diffusion-v1-5", subfolder="scheduler"
+                   )
 
     for p in vae.parameters():           p.requires_grad = False
     for p in unet.parameters():          p.requires_grad = False
     for p in text_encoder.parameters():  p.requires_grad = False
     for p in controlnet.parameters():    p.requires_grad = True
 
-    controlnet = DDP(controlnet, device_ids=[args.local_rank], output_device=args.local_rank)
+    controlnet = DDP(controlnet, device_ids=[local_rank], output_device=local_rank)
 
-    # ── 2) Dataset & Dataloader ────────────────────────
-    roots  = [r.strip() for r in args.data_roots.split(",") if r.strip()]
-    parts  = []
+    # ── 2) build concatenated dataset ──────────────────────
+    roots = [r.strip() for r in args.data_roots.split(",")]
+    parts = []
     for root in roots:
-        logging.info(f"Building XBDFullDataset for {root}")
         parts.append(XBDFullDataset(
             labels_root = os.path.join(root, "labels"),
             images_root = os.path.join(root, "images"),
@@ -79,98 +90,104 @@ def main(args):
             max_samples = args.max_samples,
             annotate    = False,
         ))
-        logging.info(f"  → {len(parts[-1])} samples in {root}")
-    ds = ConcatDataset(parts)
-    total = len(ds)
-    if is_main_process():
-        logging.info(f"Total concatenated samples: {total}")
-
-    sampler = DistributedSampler(ds, num_replicas=args.world_size, rank=args.rank, shuffle=True)
-    loader  = DataLoader(ds, batch_size=args.batch_size, sampler=sampler,
+    dataset = ConcatDataset(parts)
+    sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank, shuffle=True)
+    loader  = DataLoader(dataset, batch_size=args.batch_size, sampler=sampler,
                          num_workers=4, pin_memory=True)
 
-    # ── 3) TensorBoard ──────────────────────────────────
-    writer = None
-    if is_main_process() and args.tensorboard_dir:
+    if is_main(rank):
+        logging.info(f"Total samples: {len(dataset)}")
+        # TensorBoard
         os.makedirs(args.tensorboard_dir, exist_ok=True)
         writer = SummaryWriter(log_dir=args.tensorboard_dir)
-        logging.info(f"TensorBoard logs → {args.tensorboard_dir}")
+        logging.info(f"TensorBoard → {args.tensorboard_dir}")
+    else:
+        writer = None
 
-    # ── 4) Optimizer ────────────────────────────────────
-    optimizer = AdamW(controlnet.parameters(), lr=args.lr)
+    # ── 3) optimizer & optional resume ─────────────────────
+    start_epoch = 1
+    optimizer   = AdamW(controlnet.parameters(), lr=args.lr)
 
-    # ── 5) Training Loop ────────────────────────────────
+    if args.resume:
+        ckpt = torch.load(args.resume, map_location=device)
+        controlnet.module.load_state_dict(ckpt["model_state_dict"])
+        optimizer.load_state_dict(ckpt["optim_state_dict"])
+        start_epoch = ckpt["epoch"] + 1
+        if is_main(rank):
+            logging.info(f"Resumed from {args.resume} → continuing at epoch {start_epoch}")
+
+    # ── 4) train loop ─────────────────────────────────────
     total_steps = 0
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(start_epoch, args.epochs + 1):
         sampler.set_epoch(epoch)
-        loop = tqdm(loader, desc=f"Epoch [{epoch}/{args.epochs}]", disable=not is_main_process())
+        loop = tqdm(loader, desc=f"Epoch [{epoch}/{args.epochs}]", disable=rank!=0)
         for batch in loop:
             pre      = batch["pre"].to(device)
             post     = batch["post"].to(device)
-            severity = batch["severity"].to(device).unsqueeze(-1)
+            mask     = batch["mask"].to(device)           # [B,1,H,W]
+            B,_,H,W  = mask.shape
+            control  = mask.expand(B,3,H,W)               # [B,3,H,W]
 
-            # B, _, H, W = pre.shape
-            # control_map = severity.view(B,1,1,1).expand(B,3,H,W)
-            # ── Use the binary damage mask (not a constant gray) ──
-            # mask: [B,1,H,W], values in {0,1}
-            mask = batch["mask"].to(device)
-            B,_,H,W = mask.shape
-            # replicate to 3 channels so ControlNet (depth‐trained) can consume it
-            control_map = mask.expand(B,3,H,W)
-
-            tokens      = tokenizer(["photo"]*B, return_tensors="pt", padding="max_length",
-                                    truncation=True, max_length=tokenizer.model_max_length).to(device)
+            tokens      = tokenizer(["photo"]*B, return_tensors="pt",
+                                    padding="max_length", truncation=True,
+                                    max_length=tokenizer.model_max_length).to(device)
             text_embeds = text_encoder(**tokens).last_hidden_state
 
             with torch.no_grad():
                 latents = vae.encode(post).latent_dist.sample() * vae.config.scaling_factor
             noise     = torch.randn_like(latents)
-            timesteps = torch.randint(0, scheduler.config.num_train_timesteps, (B,), device=device)
-            noisy     = scheduler.add_noise(latents, noise, timesteps)
+            tsteps    = torch.randint(0, scheduler.config.num_train_timesteps, (B,), device=device)
+            noisy     = scheduler.add_noise(latents, noise, tsteps)
 
-            ctrl_out    = controlnet(noisy, timestep=timesteps,
-                                     encoder_hidden_states=text_embeds,
-                                     controlnet_cond=control_map)
-            down_samps  = ctrl_out.down_block_res_samples
-            mid_samp    = ctrl_out.mid_block_res_sample
+            ctrl_out  = controlnet(noisy, timestep=tsteps,
+                                   encoder_hidden_states=text_embeds,
+                                   controlnet_cond=control)
+            down, mid = ctrl_out.down_block_res_samples, ctrl_out.mid_block_res_sample
 
-            unet_out    = unet(noisy, timestep=timesteps,
-                               encoder_hidden_states=text_embeds,
-                               down_block_additional_residuals=down_samps,
-                               mid_block_additional_residual=mid_samp)
-            pred        = unet_out.sample
+            unet_out  = unet(noisy, timestep=tsteps,
+                             encoder_hidden_states=text_embeds,
+                             down_block_additional_residuals=down,
+                             mid_block_additional_residual=mid)
+            pred      = unet_out.sample
 
             loss = torch.nn.functional.mse_loss(pred, noise)
             optimizer.zero_grad(); loss.backward(); optimizer.step()
 
             total_steps += 1
-            loop.set_postfix(loss=f"{loss:.4f}")
-            if is_main_process() and writer:
+            if is_main(rank):
                 writer.add_scalar("train/loss", loss.item(), total_steps)
+                loop.set_postfix(loss=f"{loss.item():.4f}")
 
-        if is_main_process():
-            ckpt = os.path.join(args.ckpt_dir, f"controlnet_epoch{epoch}.pth")
-            torch.save(controlnet.module.state_dict(), ckpt)
-            logging.info(f"Saved checkpoint → {ckpt}")
+        # ── save checkpoint ──────────────────────────────
+        if is_main(rank):
+            out_ckpt = os.path.join(args.ckpt_dir, f"controlnet_epoch{epoch}.pth")
+            torch.save({
+                "epoch":            epoch,
+                "model_state_dict": controlnet.module.state_dict(),
+                "optim_state_dict": optimizer.state_dict(),
+            }, out_ckpt)
+            logging.info(f"Checkpoint → {out_ckpt}")
 
     if writer:
         writer.close()
-    if is_main_process():
+    if is_main(rank):
         logging.info("=== Training Complete ===")
     cleanup_ddp()
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--data_roots",      type=str,   required=True,
-                   help="Comma-separated roots: data/train,data/tier3,data/test")
-    p.add_argument("--crop_size",       type=int,   default=512)
-    p.add_argument("--max_samples",     type=int,   default=None)
-    p.add_argument("--batch_size",      type=int,   default=4)
+    p.add_argument("--data_roots",      type=str, required=True,
+                   help="CSV of roots, e.g. data/train,data/tier3,data/test")
+    p.add_argument("--crop_size",       type=int, default=512)
+    p.add_argument("--max_samples",     type=int, default=None)
+    p.add_argument("--batch_size",      type=int, default=4)
     p.add_argument("--lr",              type=float, default=1e-4)
-    p.add_argument("--epochs",          type=int,   default=10)
-    p.add_argument("--ckpt_dir",        type=str,   default="checkpoints")
-    p.add_argument("--tensorboard_dir", type=str,   default="tb_logs")
+    p.add_argument("--epochs",          type=int, default=10)
+    p.add_argument("--ckpt_dir",        type=str, default="checkpoints")
+    p.add_argument("--tensorboard_dir", type=str, default="tb_logs")
+    p.add_argument("--resume",          type=str, default=None,
+                   help="path to a resume checkpoint (dict with model+optim+epoch)")
     args = p.parse_args()
 
     os.makedirs(args.ckpt_dir, exist_ok=True)
