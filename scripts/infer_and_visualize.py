@@ -60,7 +60,7 @@ def infer_and_plot(pipe, pre_imgs, masks, severities, out_path="severity_sweep.p
     device = pipe.device
     B      = len(pre_imgs)
 
-    # Convert to PIL & keep tensor versions for the grid
+    # Convert to PIL & keep tensors for the final grid
     pil_pre, toks_pre = [], []
     for t in pre_imgs:
         arr = ((t * 0.5 + 0.5) * 255).clamp(0,255).byte().cpu().numpy()
@@ -68,15 +68,15 @@ def infer_and_plot(pipe, pre_imgs, masks, severities, out_path="severity_sweep.p
         pil_pre.append(Image.fromarray(arr))
         toks_pre.append(torch.from_numpy(arr.transpose(2,0,1)/255.0))
 
-    # Precompute CLIP text‑embeddings for “photo”
+    # Precompute CLIP embeddings for “photo”
     prompts = ["photo"] * B
-    tok      = pipe.tokenizer(
-                   prompts,
-                   return_tensors="pt",
-                   padding="max_length",
-                   truncation=True,
-                   max_length=pipe.tokenizer.model_max_length
-               ).to(device)
+    tok = pipe.tokenizer(
+        prompts,
+        return_tensors="pt",
+        padding="max_length",
+        truncation=True,
+        max_length=pipe.tokenizer.model_max_length
+    ).to(device)
     txt_emb = pipe.text_encoder(**tok).last_hidden_state
 
     all_rows = []
@@ -85,19 +85,19 @@ def infer_and_plot(pipe, pre_imgs, masks, severities, out_path="severity_sweep.p
         m   = masks[i].float().to(device)
 
         for sev in severities:
-            # build a single‑channel PIL mask
+            # build a single‐channel PIL mask
             mask_arr = (m * sev * 255).byte().cpu().numpy().squeeze(0)
             pil_mask = Image.fromarray(mask_arr).convert("L")
 
             if sev == 0.0:
-                # no-change case
+                # at zero severity, just show the original
                 gen = toks_pre[i]
             else:
                 out = pipe(
                     prompt="photo",
-                    image=[pil_pre[i]],                           # <--- wrap in list
-                    controlnet_conditioning_image=[pil_mask],      # <--- wrap in list
-                    strength=1.0 - sev,                           # 1.0 = identity, 0.0 = full repaint
+                    init_image=[pil_pre[i]],                     # ← use init_image
+                    controlnet_conditioning_image=[pil_mask],     # ← same as before
+                    strength=1.0 - sev,
                     num_inference_steps=30,
                     guidance_scale=7.5,
                 ).images[0]
