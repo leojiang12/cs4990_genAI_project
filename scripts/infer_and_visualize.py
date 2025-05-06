@@ -86,42 +86,101 @@ def infer_and_plot(pipe, pre_imgs, masks, metas, severities, out_path="severity_
             prompt += f", on {date}"
         prompts.append(prompt)
 
+    # now set up a grid of axes
+    fig, axes = plt.subplots(
+        nrows=B+1, ncols=K+1,
+        figsize=((K+1)*3, (B+1)*3),
+        gridspec_kw={"wspace":0, "hspace":0},
+    )
+
+    # 1) Header row: severities
+    axes[0][0].axis("off")
+    for j, sev in enumerate(severities):
+        ax = axes[0][j+1]
+        ax.axis("off")
+        ax.set_title(f"{sev:.2f}", pad=4)
+
     all_rows = []
     N = 30
+    # for i in range(B):
+    #     row = [toks_pre[i]]
+    #     for sev in severities:
+    #         if sev == 0.0:
+    #             gen = toks_pre[i]
+    #         else:
+    #             mask_arr = (masks[i].float() * sev * 255).byte().cpu().numpy().squeeze(0)
+    #             pil_mask = Image.fromarray(mask_arr).convert("L")
+
+    #             strength = sev
+
+    #             out = pipe(
+    #                 prompt=prompts[i],
+    #                 image=[pil_pre[i]],
+    #                 control_image=[pil_mask],
+    #                 strength=strength,
+    #                 num_inference_steps=N, # more steps → crisper output
+    #                 guidance_scale=10.0, # stronger adherence to your mask
+    #             ).images[0]
+
+    #             arr = np.array(out)
+    #             gen = torch.from_numpy(arr.transpose(2,0,1)/255.0)
+
+    #         row.append(gen)
+
+    #     all_rows.extend(row)
+
+    # grid = make_grid(torch.stack(all_rows, dim=0),
+    #                  nrow=1 + len(severities),
+    #                  pad_value=1.0)
+    # plt.figure(figsize=((1+len(severities))*3, B*3))
+    # plt.imshow(grid.permute(1,2,0).cpu().numpy())
+    # plt.axis("off")
+    # plt.savefig(out_path, bbox_inches="tight")
+    # 2) For each sample i…
     for i in range(B):
-        row = [toks_pre[i]]
-        for sev in severities:
-            if sev == 0.0:
-                gen = toks_pre[i]
-            else:
-                mask_arr = (masks[i].float() * sev * 255).byte().cpu().numpy().squeeze(0)
-                pil_mask = Image.fromarray(mask_arr).convert("L")
+        # a) Left‑column label (metadata)
+        loc = "unknown"
+        ll = metas[i].get("features",{}).get("lng_lat",[])
+        if ll:
+            p = ll[0]["properties"]
+            loc = f"{p.get('lng',0):.2f}E, {p.get('lat',0):.2f}N"
+        dtype = metas[i].get("metadata",{}).get("disaster_type","")
+        label = f"{dtype}\n{loc}"
 
-                strength = sev
+        lbl_ax = axes[i+1][0]
+        lbl_ax.axis("off")
+        lbl_ax.text(
+            0.5, 0.5, label,
+            ha="center", va="center", fontsize=10
+        )
 
-                out = pipe(
-                    prompt=prompts[i],
-                    image=[pil_pre[i]],
-                    control_image=[pil_mask],
-                    strength=strength,
-                    num_inference_steps=N, # more steps → crisper output
-                    guidance_scale=10.0, # stronger adherence to your mask
-                ).images[0]
+        # b) The 0.0‑severity “identity” image
+        axes[i+1][1].imshow(pil_pre[i])
+        axes[i+1][1].axis("off")
 
-                arr = np.array(out)
-                gen = torch.from_numpy(arr.transpose(2,0,1)/255.0)
+        # c) The rest of the severities
+        for j, sev in enumerate(severities[1:], start=2):
+            # run your ControlNet call …
+            mask_arr = (masks[i].float() * severities[j-1] * 255)\
+                           .byte().cpu().numpy().squeeze(0)
+            pil_mask = Image.fromarray(mask_arr).convert("L")
 
-            row.append(gen)
+            out = pipe(
+                prompt=prompts[i],
+                image=[pil_pre[i]],
+                control_image=[pil_mask],
+                strength=severities[j-1],
+                num_inference_steps=30,
+                guidance_scale=7.5,
+            ).images[0]
 
-        all_rows.extend(row)
+            ax = axes[i+1][j]
+            ax.imshow(out)
+            ax.axis("off")
 
-    grid = make_grid(torch.stack(all_rows, dim=0),
-                     nrow=1 + len(severities),
-                     pad_value=1.0)
-    plt.figure(figsize=((1+len(severities))*3, B*3))
-    plt.imshow(grid.permute(1,2,0).cpu().numpy())
-    plt.axis("off")
+    plt.tight_layout()
     plt.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
 
     logging.info(f"Saved severity sweep → {out_path}")
 
