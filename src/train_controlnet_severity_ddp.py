@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 import os
+import random
+import numpy as np
+from datetime import datetime
 import re
 import argparse
 import logging
@@ -48,9 +51,15 @@ def main(args):
     # ── Logging setup ───────────────────────────────────
     logging.basicConfig(
         level=logging.INFO,
+        # include seed & run_id in each message
         format="[%(asctime)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+
+    # 0) fix RNGs
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
 
     setup_ddp(args)
     device = torch.device(f"cuda:{args.local_rank}")
@@ -82,6 +91,28 @@ def main(args):
 
     # ── 2) Dataset & Dataloader ────────────────────────
     roots = [r.strip() for r in args.data_roots.split(",") if r.strip()]
+
+    # behind your training roots, expect also a test split:
+    val_root = args.val_root
+    if is_main_process():
+        logging.info(f"Building VAL dataset for {val_root}")
+    val_ds = XBDFullDataset(
+        labels_root = os.path.join(val_root, "labels"),
+        images_root = os.path.join(val_root, "images"),
+        crop_size   = args.crop_size,
+        max_samples = None,
+        annotate    = False,
+    )
+    val_sampler = DistributedSampler(val_ds,
+                                     num_replicas=args.world_size,
+                                     rank=args.rank,
+                                     shuffle=False)
+    val_loader = DataLoader(val_ds,
+                            batch_size=args.batch_size,
+                            sampler=val_sampler,
+                            num_workers=4,
+                            pin_memory=True)
+
     parts = []
     for root in roots:
         logging.info(f"Building XBDFullDataset for {root}")
@@ -106,12 +137,21 @@ def main(args):
     # ── 3) TensorBoard ──────────────────────────────────
     writer = None
     if is_main_process() and args.tensorboard_dir:
-        os.makedirs(args.tensorboard_dir, exist_ok=True)
-        writer = SummaryWriter(log_dir=args.tensorboard_dir)
+        # make a run‐unique subfolder
+        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        tb_run_dir = os.path.join(args.tensorboard_dir, run_id)
+        os.makedirs(tb_run_dir, exist_ok=True)
+        logging.info(f"TensorBoard logs → {tb_run_dir}")
+        writer = SummaryWriter(log_dir=tb_run_dir)
         logging.info(f"TensorBoard logs → {args.tensorboard_dir}")
 
     # ── 4) Optimizer & optional resume ──────────────────
     optimizer   = AdamW(controlnet.parameters(), lr=args.lr)
+
+    # we'll track average train & val loss per epoch
+    def epoch_avg_loss(running_loss, n_batches):
+        return running_loss / n_batches if n_batches>0 else float("nan")
+
     start_epoch = 1
     if args.resume:
         ckpt = torch.load(args.resume, map_location="cpu")
@@ -130,6 +170,10 @@ def main(args):
     for epoch in range(start_epoch, args.epochs + 1):
         sampler.set_epoch(epoch)
         loop = tqdm(loader, desc=f"Epoch [{epoch}/{args.epochs}]", disable=not is_main_process())
+
+        # TRAINING
+        train_loss_sum = 0.0
+        train_batches  = 0
         for batch in loop:
             pre  = batch["pre"].to(device)
             post = batch["post"].to(device)
@@ -226,7 +270,38 @@ def main(args):
             total_steps += 1
             loop.set_postfix(loss=f"{loss:.4f}")
             if is_main_process() and writer:
-                writer.add_scalar("train/loss", loss.item(), total_steps)
+                writer.add_scalar("train/step_loss", loss.item(), total_steps)
+
+            train_loss_sum += loss.item()
+            train_batches  += 1
+
+        # AFTER FINISHING ALL BATCHES: log avg train-loss
+        if is_main_process() and writer:
+            avg_train = epoch_avg_loss(train_loss_sum, train_batches)
+            writer.add_scalar("train/epoch_loss", avg_train, epoch)
+            logging.info(f"Epoch {epoch} avg TRAIN loss = {avg_train:.4f}")
+
+        # VALIDATION
+        val_loss_sum = 0.0
+        val_batches  = 0
+        controlnet.module.eval()   # DDP‐wrapped
+        unet.eval(); text_encoder.eval()
+        with torch.no_grad():
+            for batch in val_loader:
+                post = batch["post"].to(device)
+                mask = batch["mask"].to(device).expand(-1,3,-1,-1)
+                # reuse same text‐prompt logic...
+                # get text_embeds & latents & noise & timesteps as before
+                # forward through controlnet+unet, compute mse_loss
+                val_loss_sum += loss.item()
+                val_batches  += 1
+        controlnet.module.train()
+        unet.train(); text_encoder.train()
+
+        if is_main_process() and writer:
+            avg_val = epoch_avg_loss(val_loss_sum, val_batches)
+            writer.add_scalar("val/epoch_loss", avg_val, epoch)
+            logging.info(f"Epoch {epoch} avg   VAL loss = {avg_val:.4f}")
 
         # ── Checkpoint ────────────────────────────────────
         if is_main_process():
@@ -255,6 +330,10 @@ if __name__ == "__main__":
     p.add_argument("--tensorboard_dir", type=str,   default="tb_logs")
     p.add_argument("--resume",          type=str,   default=None,
                    help="path to ControlNet .pth checkpoint to resume from")
+    p.add_argument("--val_root",        type=str,   required=True,
+                   help="root of your *test* (validation) split")
+    p.add_argument("--seed",           type=int,   default=42,
+                   help="global RNG seed")
     args = p.parse_args()
 
     os.makedirs(args.ckpt_dir, exist_ok=True)
