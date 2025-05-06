@@ -60,6 +60,8 @@ def load_pipeline(controlnet_ckpt, device="cuda"):
 
 def infer_and_plot(pipe, pre_imgs, masks, metas, severities, out_path="severity_sweep.png"):
     B = len(pre_imgs)
+    K = len(severities)
+    
     logging.info(f"Running inference on {B} samples with severities={severities}")
 
     # convert everything to PIL + keep a tensor copy for final grid
