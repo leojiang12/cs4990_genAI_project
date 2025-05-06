@@ -11,3 +11,4 @@ transformers
 accelerate
 safetensors
 torchinfo
+scikit-image
