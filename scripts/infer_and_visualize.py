@@ -108,9 +108,9 @@ def infer_and_plot(pipe, pre_imgs, masks, metas, severities, out_path="severity_
                 gen = toks_pre[i]
             else:
                 out = pipe(
-                    prompt=[prompts[i]],
-                    image=[pil_pre[i]],
-                    controlnet_conditioning_image=[pil_mask],
+                    prompt=prompts[i],
+                    image=pil_pre[i],
+                    controlnet_conditioning_image=pil_mask,
                     strength=1.0 - sev,           # ← sev here
                     num_inference_steps=30,
                     guidance_scale=7.5,
