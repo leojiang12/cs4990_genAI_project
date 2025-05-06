@@ -4,9 +4,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=2
 #SBATCH --gres=gpu:2
-#SBATCH --time=12:00:00
-#SBATCH --output=logs/train_resume_%j.log
-#SBATCH --error=logs/train_resume_%j.err
+#SBATCH -t 21-00:00:00
+#SBATCH --output=logs/sd_control_train_resume_%j.log
+#SBATCH --error=logs/sd_control_train_resume_%j.err
 
 echo "===== JOB START $(date) ====="
 
