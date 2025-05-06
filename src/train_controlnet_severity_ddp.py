@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os
+import os, re
 import argparse
 import logging
 from tqdm import tqdm
@@ -108,13 +108,28 @@ def main(args):
     start_epoch = 1
     optimizer   = AdamW(controlnet.parameters(), lr=args.lr)
 
+    start_epoch = 1
     if args.resume:
         ckpt = torch.load(args.resume, map_location=device)
-        controlnet.module.load_state_dict(ckpt["model_state_dict"])
-        optimizer.load_state_dict(ckpt["optim_state_dict"])
-        start_epoch = ckpt["epoch"] + 1
-        if is_main(rank):
-            logging.info(f"Resumed from {args.resume} → continuing at epoch {start_epoch}")
+        # new-format resume?
+        if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
+            controlnet.module.load_state_dict(ckpt["model_state_dict"])
+            optimizer.load_state_dict(ckpt["optim_state_dict"])
+            start_epoch = ckpt.get("epoch", 0) + 1
+            if is_main(rank):
+                logging.info(f"Resumed from {args.resume} at epoch {start_epoch}")
+        else:
+            # old-format (raw state_dict)
+            controlnet.module.load_state_dict(ckpt)
+            # try to parse epoch from filename: controlnet_epoch{N}.pth
+            m = re.search(r"epoch(\d+)\.pth$", args.resume)
+            if m:
+                start_epoch = int(m.group(1)) + 1
+                if is_main(rank):
+                    logging.info(f"Loaded legacy checkpoint, starting at epoch {start_epoch}")
+            else:
+                if is_main(rank):
+                    logging.info(f"Loaded legacy checkpoint, but couldn't infer epoch—starting at 1")
 
     # ── 4) train loop ─────────────────────────────────────
     total_steps = 0
