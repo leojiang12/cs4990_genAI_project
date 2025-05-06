@@ -3,6 +3,7 @@ import os
 import sys
 import random
 import logging
+
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -22,9 +23,9 @@ from diffusers import (
 from transformers import CLIPTextModel, CLIPTokenizer
 from src.datasets import XBDFullDataset  
 
-# ── 0) Logging ──────────────────────────────────────────────
+# ── Logging ──────────────────────────────────────────────
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
@@ -52,81 +53,63 @@ def load_pipeline(controlnet_ckpt, device="cuda"):
         feature_extractor=None,
     ).to(device)
     pipe.enable_model_cpu_offload()
-    logging.info(f"Pipeline class: {pipe.__class__}")
+
+    logging.info("Pipeline loaded.")
     return pipe
 
 
 def infer_and_plot(pipe, pre_imgs, masks, metas, severities, out_path="severity_sweep.png"):
-    device = pipe.device
-    B      = len(pre_imgs)
+    B = len(pre_imgs)
     logging.info(f"Running inference on {B} samples with severities={severities}")
 
-    # 1) convert to PIL & keep a tensor copy
+    # convert everything to PIL + keep a tensor copy for final grid
     pil_pre, toks_pre = [], []
-    for idx, t in enumerate(pre_imgs):
-        # from [-1..1] tensor to uint8
+    for t in pre_imgs:
         arr = ((t * 0.5 + 0.5) * 255).clamp(0,255).byte().cpu().numpy()
         arr = arr.transpose(1,2,0)
-        pil = Image.fromarray(arr)
-        pil_pre.append(pil)
+        pil_pre.append(Image.fromarray(arr))
         toks_pre.append(torch.from_numpy(arr.transpose(2,0,1)/255.0))
-        logging.debug(f"[{idx}] pre_img: PIL type={type(pil)}, size={pil.size}; tensor shape={t.shape}")
 
-    # 2) build prompts
+    # build simple prompts from metadata
     prompts = []
-    for idx, m in enumerate(metas):
-        dmeta = m.get("metadata", {})
-        dtype = dmeta.get("disaster_type", dmeta.get("disaster", ""))
-        loc   = "unknown"
-        lnglat = m.get("features", {}).get("lng_lat", [])
-        if lnglat:
-            c = lnglat[0].get("properties", {})
-            loc = f"{c.get('lng',0):.2f}E,{c.get('lat',0):.2f}N"
-        date = dmeta.get("capture_date","").split("T")[0]
-        p = f"{dtype} aftermath in {loc}"
-        if date: p += f", on {date}"
-        prompts.append(p)
-        logging.debug(f"[{idx}] prompt: {p!r} (type={type(p)})")
+    for m in metas:
+        d = m.get("metadata", {})
+        dtype = d.get("disaster_type", d.get("disaster",""))
+        loc = "unknown"
+        ll = m.get("features",{}).get("lng_lat",[])
+        if ll:
+            p = ll[0].get("properties",{})
+            loc = f"{p.get('lng',0):.2f}E,{p.get('lat',0):.2f}N"
+        date = d.get("capture_date","").split("T")[0]
+        prompt = f"{dtype} aftermath in {loc}"
+        if date:
+            prompt += f", on {date}"
+        prompts.append(prompt)
 
     all_rows = []
     for i in range(B):
         row = [toks_pre[i]]
-        logging.debug(f"--- Sample {i} sweep ---")
         for sev in severities:
-            # make mask PIL
-            mask_arr = (masks[i].float() * sev * 255).byte().cpu().numpy().squeeze(0)
-            pil_mask = Image.fromarray(mask_arr).convert("L")
-            logging.debug(f"sev={sev}: pil_mask type={type(pil_mask)}, size={pil_mask.size}, array dtype={mask_arr.dtype}")
-
             if sev == 0.0:
                 gen = toks_pre[i]
             else:
-                # super verbose before call
-                logging.debug(f"CALL→ pipe(\n"
-                              f"    prompt        = {prompts[i]!r} ({type(prompts[i])}),\n"
-                              f"    init_image    = {[pil_pre[i]]} ({type([pil_pre[i]])}),\n"
-                              f"    control_image = {[pil_mask]} ({type([pil_mask])}),\n"
-                              f"    strength      = {1.0 - sev},\n"
-                              f"    steps         = 30,\n"
-                              f"    guidance      = 7.5\n)")
-                try:
-                    out = pipe(
-                        prompt=prompts[i],
-                        image=[pil_pre[i]],
-                        control_image=[pil_mask],
-                        strength=1.0 - sev,
-                        num_inference_steps=30,
-                        guidance_scale=7.5,
-                    ).images[0]
-                except Exception:
-                    logging.exception(f"❌ pipe() exploded at sample={i}, sev={sev}")
-                    raise
+                mask_arr = (masks[i].float() * sev * 255).byte().cpu().numpy().squeeze(0)
+                pil_mask = Image.fromarray(mask_arr).convert("L")
+
+                out = pipe(
+                    prompt=prompts[i],
+                    image=[pil_pre[i]],
+                    control_image=[pil_mask],
+                    strength=1.0 - sev,
+                    num_inference_steps=30,
+                    guidance_scale=7.5,
+                ).images[0]
 
                 arr = np.array(out)
                 gen = torch.from_numpy(arr.transpose(2,0,1)/255.0)
-                logging.debug(f"   ← out PIL type={type(out)}, size={out.size}, tensor shape={gen.shape}")
 
             row.append(gen)
+
         all_rows.extend(row)
 
     grid = make_grid(torch.stack(all_rows, dim=0),
@@ -136,35 +119,47 @@ def infer_and_plot(pipe, pre_imgs, masks, metas, severities, out_path="severity_
     plt.imshow(grid.permute(1,2,0).cpu().numpy())
     plt.axis("off")
     plt.savefig(out_path, bbox_inches="tight")
+
     logging.info(f"Saved severity sweep → {out_path}")
 
 
 if __name__=="__main__":
     import argparse
+
     parser = argparse.ArgumentParser()
-    parser.add_argument("--ckpt",        required=True)
-    parser.add_argument("--data_root",   required=True)
-    parser.add_argument("--max_samples", type=int, default=4)
-    parser.add_argument("--severities",  type=str, default="0.0,0.25,0.5,0.75,1.0")
-    parser.add_argument("--random_sample", action="store_true")
+    parser.add_argument("--ckpt",        required=True,
+                        help="path to ControlNet .pth checkpoint")
+    parser.add_argument("--data_root",   required=True,
+                        help="root of your dataset (labels/ & images/)")
+    parser.add_argument("--max_samples", type=int, default=4,
+                        help="how many examples to visualize")
+    parser.add_argument("--severities",  type=str,
+                        default="0.0,0.25,0.5,0.75,1.0",
+                        help="comma‑separated severity levels")
+    parser.add_argument("--random_sample", action="store_true",
+                        help="randomly pick samples")
     parser.add_argument("--out",         default="results.png")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    pipe   = load_pipeline(args.ckpt, device)
+    pipe = load_pipeline(args.ckpt, device)
 
     ds = XBDFullDataset(
-        labels_root = os.path.join(args.data_root,"labels"),
-        images_root = os.path.join(args.data_root,"images"),
-        crop_size   = 512, max_samples=None, annotate=False,
+        labels_root = os.path.join(args.data_root, "labels"),
+        images_root = os.path.join(args.data_root, "images"),
+        crop_size   = 512,
+        max_samples = None,
+        annotate    = False,
     )
     N = len(ds)
     if N == 0:
         raise RuntimeError("No samples found in " + args.data_root)
 
-    M      = min(args.max_samples, N)
-    idxs   = random.sample(range(N), M) if args.random_sample else list(range(M))
-    pre_imgs = [ds[i]["pre"] for i in idxs]
+    M = min(args.max_samples, N)
+    idxs = (random.sample(range(N), M)
+            if args.random_sample else list(range(M)))
+
+    pre_imgs = [ds[i]["pre"]  for i in idxs]
     masks    = [ds[i]["mask"] for i in idxs]
     metas    = [ds[i]["meta"] for i in idxs]
     sev_list = [float(x) for x in args.severities.split(",")]
