@@ -114,7 +114,12 @@ def main(args):
         # new-format resume?
         if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
             controlnet.module.load_state_dict(ckpt["model_state_dict"])
-            optimizer.load_state_dict(ckpt["optim_state_dict"])
+            # Move all Adam buffers to CPU first, to avoid OOM
+            optim_sd = ckpt["optim_state_dict"]
+            for s in optim_sd["state"].values():
+                for k,v in list(s.items()):
+                    if isinstance(v, torch.Tensor):
+                        s[k] = v.cpu()
             start_epoch = ckpt.get("epoch", 0) + 1
             if is_main(rank):
                 logging.info(f"Resumed from {args.resume} at epoch {start_epoch}")
