@@ -2,6 +2,7 @@
 import os
 import sys
 import random
+import logging
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
@@ -21,8 +22,15 @@ from diffusers import (
 from transformers import CLIPTextModel, CLIPTokenizer
 from src.datasets import XBDFullDataset  
 
+# ── 0) Logging ──────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
 
 def load_pipeline(controlnet_ckpt, device="cuda"):
+    logging.info(f"Loading pipeline on {device} with ckpt={controlnet_ckpt}")
     vae       = AutoencoderKL.from_pretrained(
                     "runwayml/stable-diffusion-v1-5", subfolder="vae"
                 ).to(device)
@@ -53,24 +61,28 @@ def load_pipeline(controlnet_ckpt, device="cuda"):
         feature_extractor=None,
     ).to(device)
     pipe.enable_model_cpu_offload()
+    logging.info("Pipeline loaded.")
     return pipe
 
 
 def infer_and_plot(pipe, pre_imgs, masks, metas, severities, out_path="severity_sweep.png"):
     device = pipe.device
     B      = len(pre_imgs)
+    logging.info(f"Running inference on {B} samples with severities={severities}")
 
-    # Convert to PIL & keep tensors for the final grid
+    # Convert to PIL & keep tensors
     pil_pre, toks_pre = [], []
-    for t in pre_imgs:
+    for idx, t in enumerate(pre_imgs):
         arr = ((t * 0.5 + 0.5) * 255).clamp(0,255).byte().cpu().numpy()
         arr = arr.transpose(1,2,0)
-        pil_pre.append(Image.fromarray(arr))
+        pil = Image.fromarray(arr)
+        pil_pre.append(pil)
         toks_pre.append(torch.from_numpy(arr.transpose(2,0,1)/255.0))
+        logging.debug(f"Sample[{idx}] pre-image PIL size={pil.size}, tensor shape={t.shape}")
 
-    # ---- build a rich prompt from each sample's metadata ----
+    # Build rich prompts
     prompts = []
-    for m in metas:
+    for idx, m in enumerate(metas):
         # location
         lnglat = m.get("features",{}).get("lng_lat", [])
         if lnglat:
@@ -78,22 +90,14 @@ def infer_and_plot(pipe, pre_imgs, masks, metas, severities, out_path="severity_
             loc = f"{coords.get('lng'):.2f}E,{coords.get('lat'):.2f}N"
         else:
             loc = "unknown location"
-
-        # disaster fields
+        # disaster
         dmeta = m.get("metadata",{})
         dtype = dmeta.get("disaster_type", dmeta.get("disaster",""))
         date  = dmeta.get("capture_date","").split("T")[0]
-        sun   = dmeta.get("sun_elevation", None)
-        off   = dmeta.get("off_nadir_angle", None)
-        gsd   = dmeta.get("gsd", None)
-
         p = f"{dtype} aftermath in {loc}"
         if date: p += f", on {date}"
-        if sun:  p += f", sunny {sun:.1f}°"
-        if off:  p += f", off‑nadir {off:.1f}°"
-        if gsd:  p += f", {gsd:.2f} m/px"
         prompts.append(p)
-    # -----------------------------------------------------------
+        logging.debug(f"Sample[{idx}] prompt = “{p}”")
 
     all_rows = []
     for i in range(B):
@@ -101,22 +105,34 @@ def infer_and_plot(pipe, pre_imgs, masks, metas, severities, out_path="severity_
         m   = masks[i].float().to(device)
 
         for sev in severities:
-            mask_arr = (m * sev * 255).byte().cpu().numpy().squeeze(0)
-            pil_mask = Image.fromarray(mask_arr).convert("L")
+            pil_mask = Image.fromarray(
+                (m * sev * 255).byte().cpu().numpy().squeeze(0)
+            ).convert("L")
 
             if sev == 0.0:
                 gen = toks_pre[i]
             else:
-                out = pipe(
-                    prompt=prompts[i],
-                    image=pil_pre[i],
-                    controlnet_conditioning_image=pil_mask,
-                    strength=1.0 - sev,           # ← sev here
-                    num_inference_steps=30,
-                    guidance_scale=7.5,
-                ).images[0]
-                arr = np.array(out)
-                gen = torch.from_numpy(arr.transpose(2,0,1)/255.0)
+                # --- log right before calling the pipeline ---
+                logging.debug(f"Calling pipe for sample {i}, sev={sev}")
+                logging.debug(f"  prompt type={type(prompts[i])}, value=“{prompts[i]}”")
+                logging.debug(f"  image type={type(pil_pre[i])}, size={pil_pre[i].size}")
+                logging.debug(f"  control_image type={type(pil_mask)}, size={pil_mask.size}")
+                try:
+                    out = pipe(
+                        prompt=prompts[i],
+                        image=pil_pre[i],
+                        controlnet_conditioning_image=pil_mask,
+                        strength=1.0 - sev,
+                        num_inference_steps=30,
+                        guidance_scale=7.5,
+                    ).images[0]
+                except Exception as e:
+                    logging.exception(f"❌ pipe(...) failed for sample {i}, sev={sev}")
+                    raise
+
+                arr  = np.array(out)
+                gen  = torch.from_numpy(arr.transpose(2,0,1)/255.0)
+                logging.debug(f"  → generated tensor shape={gen.shape}")
 
             row.append(gen)
 
@@ -129,8 +145,7 @@ def infer_and_plot(pipe, pre_imgs, masks, metas, severities, out_path="severity_
     plt.imshow(grid.permute(1,2,0).cpu().numpy())
     plt.axis("off")
     plt.savefig(out_path, bbox_inches="tight")
-    print(f"Saved severity sweep → {out_path}")
-
+    logging.info(f"Saved severity sweep → {out_path}")
 
 
 if __name__=="__main__":
@@ -164,7 +179,7 @@ if __name__=="__main__":
     if N == 0:
         raise RuntimeError("No samples found in " + args.data_root)
 
-    M = min(args.max_samples, N)
+    M     = min(args.max_samples, N)
     indices = (random.sample(range(N), M)
                if args.random_sample else list(range(M)))
 
