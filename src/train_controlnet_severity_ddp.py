@@ -33,10 +33,12 @@ def cleanup_ddp():
 def is_main():
     return dist.get_rank() == 0
 
-def tensor_to_np(x):
-    img = (x.clamp(-1,1)+1)/2    # to [0,1]
-    arr = img.cpu().numpy().transpose(0,2,3,1) * 255
-    return arr.astype(np.uint8)
+def tensor_to_np(x: torch.Tensor):
+    # x: [B, C, H, W]
+    arr = x.cpu().numpy().transpose(0,2,3,1)  # → [B, H, W, C]
+    arr = (arr * 255).astype(np.uint8)
+    return arr
+
 
 def main():
     p = argparse.ArgumentParser()
@@ -213,7 +215,8 @@ def main():
 
                 mse = torch.nn.functional.mse_loss(out, noise).item()
                 # decode to images
-                gt_img = tensor_to_np(((post+1)/2).unsqueeze(0))[0]
+                # FIX: post is [B,3,H,W], so just pass (post+1)/2 directly
+                gt_img = tensor_to_np((post+1)/2)[0]
                 pred_img = tensor_to_np(((vae.decode(out/vae.config.scaling_factor)+1)/2))[0]
                 psnr = compute_psnr(gt_img, pred_img, data_range=255)
                 ssim = compute_ssim(gt_img, pred_img, multichannel=True, data_range=255)
