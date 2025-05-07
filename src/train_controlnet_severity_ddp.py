@@ -295,7 +295,7 @@ def main():
                     lnglat = m.get("features", {}).get("lng_lat", [])
                     if lnglat:
                         coords = lnglat[0].get("properties", {})
-                        loc = f"{coords.get('lng',0):.2f}E,{coords.get('lat',0):.2f}`
+                        loc = f"{coords.get('lng',0):.2f}E,{coords.get('lat',0):.2f}N"
                     else:
                         loc = "unknown location"
                     meta_d = m.get("metadata", {})
