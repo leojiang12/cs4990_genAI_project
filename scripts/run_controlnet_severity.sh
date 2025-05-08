@@ -9,7 +9,7 @@
 #SBATCH --output=logs/sd_control_train_%j.log
 #SBATCH --error=logs/sd_control_train_%j.err
 
-RUN_NAME=${1:-"controlnet_${SLURM_JOB_ID}"}
+RUN_NAME=${1:-"controlnet2_${SLURM_JOB_ID}"}
 
 echo "===== JOB START $(date) (run=${RUN_NAME}) ====="
 
