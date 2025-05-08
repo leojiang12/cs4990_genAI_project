@@ -377,15 +377,16 @@ def main():
                 # batch MSE
                 batch_mse = torch.nn.functional.mse_loss(out, noise).item()
 
+                # compute & log PSNR/SSIM for this batch
+                psnr_vals = [compute_psnr(g, p, data_range=255)
+                                for g,p in zip(gt_np, pred_np)]
+                ssim_vals = [compute_ssim(g, p, channel_axis=-1, data_range=255)
+                                for g,p in zip(gt_np, pred_np)]
+
                 # ─── batch‑level VAL TensorBoard logging ───
                 if is_main() and writer:
                     # log MSE
                     writer.add_scalar("val/batch_mse",  batch_mse,  val_step)
-                    # compute & log PSNR/SSIM for this batch
-                    psnr_vals = [compute_psnr(g, p, data_range=255)
-                                 for g,p in zip(gt_np, pred_np)]
-                    ssim_vals = [compute_ssim(g, p, channel_axis=-1, data_range=255)
-                                 for g,p in zip(gt_np, pred_np)]
                     writer.add_scalar("val/batch_psnr", float(np.mean(psnr_vals)), val_step)
                     writer.add_scalar("val/batch_ssim", float(np.mean(ssim_vals)), val_step)
                     val_step += 1
