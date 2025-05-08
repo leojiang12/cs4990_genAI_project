@@ -58,11 +58,11 @@ def load_pipeline(controlnet_ckpt, device="cuda"):
     return pipe
 
 
-def infer_and_plot(pipe, pre_imgs, masks, metas, severities, out_path="severity_sweep.png"):
+def infer_and_plot(pipe, pre_imgs, masks, metas, post_imgs, severities, out_path="severity_sweep.png"):
     B = len(pre_imgs)
     logging.info(f"Running inference on {B} samples with severities={severities}")
 
-    # convert everything to PIL + keep a tensor copy for final grid
+    # convert pre-disaster to PIL + tensor
     pil_pre, toks_pre = [], []
     for t in pre_imgs:
         arr = ((t * 0.5 + 0.5) * 255).clamp(0,255).byte().cpu().numpy()
@@ -70,13 +70,21 @@ def infer_and_plot(pipe, pre_imgs, masks, metas, severities, out_path="severity_
         pil_pre.append(Image.fromarray(arr))
         toks_pre.append(torch.from_numpy(arr.transpose(2,0,1)/255.0))
 
+    # convert post-disaster to PIL + tensor
+    pil_post, toks_post = [], []
+    for t in post_imgs:
+        arr = ((t * 0.5 + 0.5) * 255).clamp(0,255).byte().cpu().numpy()
+        arr = arr.transpose(1,2,0)
+        pil_post.append(Image.fromarray(arr))
+        toks_post.append(torch.from_numpy(arr.transpose(2,0,1)/255.0))
+
     # build simple prompts from metadata
     prompts = []
     for m in metas:
         d = m.get("metadata", {})
         dtype = d.get("disaster_type", d.get("disaster",""))
-        loc = "unknown"
         ll = m.get("features",{}).get("lng_lat",[])
+        loc = "unknown"
         if ll:
             p = ll[0].get("properties",{})
             loc = f"{p.get('lng',0):.2f}E,{p.get('lat',0):.2f}N"
@@ -94,36 +102,34 @@ def infer_and_plot(pipe, pre_imgs, masks, metas, severities, out_path="severity_
             if sev == 0.0:
                 gen = toks_pre[i]
             else:
-                mask_arr = (masks[i].float() * sev * 255).byte().cpu().numpy().squeeze(0)
-                pil_mask = Image.fromarray(mask_arr).convert("L")
-
-                strength = sev
-
+                pil_mask = Image.fromarray((masks[i].float() * sev * 255)
+                                           .byte().cpu().numpy().squeeze(0)).convert("L")
                 out = pipe(
                     prompt=prompts[i],
                     image=[pil_pre[i]],
                     control_image=[pil_mask],
-                    strength=strength,
-                    num_inference_steps=N, # more steps → crisper output
-                    guidance_scale=10.0, # stronger adherence to your mask
+                    strength=sev,
+                    num_inference_steps=N,
+                    guidance_scale=10.0,
                 ).images[0]
-
                 arr = np.array(out)
                 gen = torch.from_numpy(arr.transpose(2,0,1)/255.0)
-
             row.append(gen)
+
+        # append the ground‑truth post‑disaster image as final column
+        row.append(toks_post[i])
 
         all_rows.extend(row)
 
-    grid = make_grid(torch.stack(all_rows, dim=0),
-                     nrow=1 + len(severities),
-                     pad_value=1.0)
-    plt.figure(figsize=((1+len(severities))*3, B*3))
+    # build grid: 1 pre + len(severities) + 1 post columns
+    cols = 1 + len(severities) + 1
+    grid = make_grid(torch.stack(all_rows, dim=0), nrow=cols, pad_value=1.0)
+    plt.figure(figsize=(cols*3, B*3))
     plt.imshow(grid.permute(1,2,0).cpu().numpy())
     plt.axis("off")
     plt.savefig(out_path, bbox_inches="tight")
-
     logging.info(f"Saved severity sweep → {out_path}")
+
 
 
 if __name__=="__main__":
@@ -162,9 +168,16 @@ if __name__=="__main__":
     idxs = (random.sample(range(N), M)
             if args.random_sample else list(range(M)))
 
-    pre_imgs = [ds[i]["pre"]  for i in idxs]
-    masks    = [ds[i]["mask"] for i in idxs]
-    metas    = [ds[i]["meta"] for i in idxs]
-    sev_list = [float(x) for x in args.severities.split(",")]
+    pre_imgs  = [ds[i]["pre"]   for i in idxs]
+    masks     = [ds[i]["mask"]  for i in idxs]
+    post_imgs = [ds[i]["post"]  for i in idxs]   # ← add this line
+    metas     = [ds[i]["meta"]  for i in idxs]
+    sev_list  = [float(x) for x in args.severities.split(",")]
 
-    infer_and_plot(pipe, pre_imgs, masks, metas, sev_list, out_path=args.out)
+    infer_and_plot(pipe,
+                    pre_imgs,
+                    masks,
+                    metas,
+                    post_imgs,        # ← pass post_imgs here
+                    sev_list,
+                    out_path=args.out)
