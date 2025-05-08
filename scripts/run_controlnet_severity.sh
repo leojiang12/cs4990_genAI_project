@@ -27,7 +27,7 @@ mkdir -p "$TB_DIR" "$CKPT_DIR"
 
 # 3) launch
 torchrun --nproc_per_node=2 -m src.train_controlnet_severity_ddp \
-  --data_roots data/train, data/tier3 \
+  --data_roots data/train,data/tier3 \
   --val_root   data/test \
   --seed       42 \
   --run_name  "$RUN_NAME" \
