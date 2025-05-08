@@ -9,7 +9,7 @@
 #SBATCH --output=logs/sd_control_train_%j.log
 #SBATCH --error=logs/sd_control_train_%j.err
 
-RUN_NAME=${1:-"controlnet2_${SLURM_JOB_ID}"}
+RUN_NAME=${1:-"controlnet3_${SLURM_JOB_ID}"}
 
 echo "===== JOB START $(date) (run=${RUN_NAME}) ====="
 
@@ -27,14 +27,14 @@ mkdir -p "$TB_DIR" "$CKPT_DIR"
 
 # 3) launch
 torchrun --nproc_per_node=2 -m src.train_controlnet_severity_ddp \
-  --data_roots data/test \
+  --data_roots data/train, data/tier3 \
   --val_root   data/test \
   --seed       42 \
   --run_name  "$RUN_NAME" \
   --crop_size 512 \
   --batch_size 2 \
   --lr 1e-4 \
-  --epochs 15 \
+  --epochs 50 \
   --ckpt_dir "$CKPT_DIR" \
   --tensorboard_dir "$TB_DIR" \
   ${@:2}   # pass any extra flags
