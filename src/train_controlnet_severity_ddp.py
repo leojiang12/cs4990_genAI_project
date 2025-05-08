@@ -362,7 +362,7 @@ def main():
                 for g_img, p_img in zip(gt_np, pred_np):
                     val_psnr += compute_psnr(g_img, p_img, data_range=255)
                     val_ssim += compute_ssim(g_img, p_img,
-                                             multichannel=True,
+                                             channel_axis=-1, # last axis is the color channel
                                              data_range=255)
                     val_batches += 1
 
