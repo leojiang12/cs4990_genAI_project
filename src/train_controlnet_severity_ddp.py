@@ -27,6 +27,12 @@ from skimage.metrics import structural_similarity as compute_ssim
 
 from src.datasets import XBDFullDataset
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s"
+)
+
+
 def setup_ddp():
     dist.init_process_group(backend="nccl", init_method="env://")
     local_rank = int(os.environ["LOCAL_RANK"])
@@ -142,6 +148,9 @@ def main():
     )
 
     # ── TensorBoard ─────────────────────────────────────
+    # ───── step counters ─────
+    train_step = 0
+    val_step   = 0
     writer = None
     if is_main():
         run_id = args.run_name or datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -155,6 +164,7 @@ def main():
             "seed": args.seed,
             "no_controlnet": args.no_controlnet,
         }, {})
+
 
     os.makedirs(args.ckpt_dir, exist_ok=True)
     optimizer = AdamW(controlnet.parameters(), lr=args.lr)
@@ -261,13 +271,22 @@ def main():
             loss.backward()
             optimizer.step()
 
+            # ─── batch-level TensorBoard logging ───
+            if is_main() and writer:
+                writer.add_scalar("train/batch_mse",
+                                loss.item(),
+                                train_step)
+                train_step += 1
+
             train_loss   += loss.item()
             train_batches += 1
             loop.set_postfix(loss=f"{loss:.4f}")
 
         avg_train = train_loss / train_batches
-        if is_main() and writer:
-            writer.add_scalar("train/epoch_mse", avg_train, ep)
+        if is_main():
+           # log to TensorBoard
+           if writer:
+               writer.add_scalar("train/epoch_mse", avg_train, ep)
 
         # ——— validation —
         controlnet.eval()
@@ -351,6 +370,19 @@ def main():
 
                 # batch MSE
                 batch_mse = torch.nn.functional.mse_loss(out, noise).item()
+                # ─── batch‑level VAL TensorBoard logging ───
+                if is_main() and writer:
+                    # log MSE
+                    writer.add_scalar("val/batch_mse", batch_mse, val_step)
+                    # compute & log PSNR/SSIM for this batch
+                    psnr_vals = [compute_psnr(g, p, data_range=255)
+                                for g,p in zip(gt_np, pred_np)]
+                    ssim_vals = [compute_ssim(g, p, channel_axis=-1, data_range=255)
+                                for g,p in zip(gt_np, pred_np)]
+                    writer.add_scalar("val/batch_psnr", float(np.mean(psnr_vals)), val_step)
+                    writer.add_scalar("val/batch_ssim", float(np.mean(ssim_vals)), val_step)
+                    val_step += 1
+
                 val_mse  += batch_mse
 
                 # batch PSNR/SSIM over entire batch
@@ -370,10 +402,19 @@ def main():
         avg_val_psnr = val_psnr / val_batches
         avg_val_ssim = val_ssim / val_batches
 
-        if is_main() and writer:
-            writer.add_scalar("val/epoch_mse",  avg_val_mse,  ep)
-            writer.add_scalar("val/epoch_psnr", avg_val_psnr, ep)
-            writer.add_scalar("val/epoch_ssim", avg_val_ssim, ep)
+        if is_main():
+           # log to TensorBoard
+           if writer:
+               writer.add_scalar("val/epoch_mse",  avg_val_mse,  ep)
+               writer.add_scalar("val/epoch_psnr", avg_val_psnr, ep)
+               writer.add_scalar("val/epoch_ssim", avg_val_ssim, ep)
+
+           # PRINT A SUMMARY TO STDOUT
+           print(f"Epoch {ep}/{args.epochs} summary:")
+           print(f"  train_mse = {avg_train:.6f}")
+           print(f"  val_mse   = {avg_val_mse:.6f}")
+           print(f"  val_psnr  = {avg_val_psnr:.2f}")
+           print(f"  val_ssim  = {avg_val_ssim:.4f}")
 
         # ── checkpoint ────────────────────────────────────
         if is_main():
