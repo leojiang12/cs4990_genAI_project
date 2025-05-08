@@ -368,35 +368,33 @@ def main():
                                down_block_additional_residuals=c.down_block_res_samples,
                                mid_block_additional_residual=c.mid_block_res_sample).sample
 
-                # batch MSE
-                batch_mse = torch.nn.functional.mse_loss(out, noise).item()
-                # ─── batch‑level VAL TensorBoard logging ───
-                if is_main() and writer:
-                    # log MSE
-                    writer.add_scalar("val/batch_mse", batch_mse, val_step)
-                    # compute & log PSNR/SSIM for this batch
-                    psnr_vals = [compute_psnr(g, p, data_range=255)
-                                for g,p in zip(gt_np, pred_np)]
-                    ssim_vals = [compute_ssim(g, p, channel_axis=-1, data_range=255)
-                                for g,p in zip(gt_np, pred_np)]
-                    writer.add_scalar("val/batch_psnr", float(np.mean(psnr_vals)), val_step)
-                    writer.add_scalar("val/batch_ssim", float(np.mean(ssim_vals)), val_step)
-                    val_step += 1
-
-                val_mse  += batch_mse
-
-                # batch PSNR/SSIM over entire batch
+                # ——— reconstruct images for PSNR/SSIM ———
                 gt_np   = tensor_to_np((post + 1) / 2)
                 dec     = vae.decode(out / vae.config.scaling_factor,
                                      return_dict=False)[0]
                 pred_np = tensor_to_np((dec + 1) / 2)
 
-                for g_img, p_img in zip(gt_np, pred_np):
-                    val_psnr += compute_psnr(g_img, p_img, data_range=255)
-                    val_ssim += compute_ssim(g_img, p_img,
-                                             channel_axis=-1, # last axis is the color channel
-                                             data_range=255)
-                    val_batches += 1
+                # batch MSE
+                batch_mse = torch.nn.functional.mse_loss(out, noise).item()
+
+                # ─── batch‑level VAL TensorBoard logging ───
+                if is_main() and writer:
+                    # log MSE
+                    writer.add_scalar("val/batch_mse",  batch_mse,  val_step)
+                    # compute & log PSNR/SSIM for this batch
+                    psnr_vals = [compute_psnr(g, p, data_range=255)
+                                 for g,p in zip(gt_np, pred_np)]
+                    ssim_vals = [compute_ssim(g, p, channel_axis=-1, data_range=255)
+                                 for g,p in zip(gt_np, pred_np)]
+                    writer.add_scalar("val/batch_psnr", float(np.mean(psnr_vals)), val_step)
+                    writer.add_scalar("val/batch_ssim", float(np.mean(ssim_vals)), val_step)
+                    val_step += 1
+
+                # accumulate for epoch averages
+                val_mse  += batch_mse
+                val_psnr += sum(psnr_vals)
+                val_ssim += sum(ssim_vals)
+                val_batches += len(psnr_vals)
 
         avg_val_mse  = val_mse  / val_batches
         avg_val_psnr = val_psnr / val_batches
