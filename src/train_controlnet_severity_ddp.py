@@ -147,6 +147,23 @@ def main():
         pin_memory=True
     )
 
+        # ─── report dataset sizes ───────────────────
+    if is_main():
+        # validation set size
+        val_count = len(val_ds)
+        print(f"Validation root '{args.val_root}' contains {val_count} samples.")
+
+        # per‐root train sizes
+        total_train = 0
+        for rt, ds in zip(roots, parts):
+            c = len(ds)
+            print(f"Training root '{rt}' contains {c} samples.")
+            total_train += c
+
+        print(f"Total training samples across all roots: {total_train}")
+    # ─────────────────────────────────────────────
+
+
     # ── TensorBoard ─────────────────────────────────────
     # ───── step counters ─────
     train_step = 0
