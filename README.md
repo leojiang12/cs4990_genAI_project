@@ -2,7 +2,9 @@
 
 ## Spring 2025
 
-### Project structure (GPT-proposed)
+***Not updated***
+
+### Project structure 
 
 xbd_scratch/ \
 ├── data/                   # your full 10 GB xBD dataset goes here \
