@@ -4,7 +4,7 @@ from tensorboard.backend.event_processing import event_accumulator
 import matplotlib.pyplot as plt
 
 # 1) Point this at the directory for one run
-LOGDIR = "tb_logs/controlnet3_66090/"
+LOGDIR = "tb_logs/controlnet3_66090/controlnet3_66090/"
 
 # 2) Load all events
 ea = event_accumulator.EventAccumulator(
@@ -12,6 +12,25 @@ ea = event_accumulator.EventAccumulator(
     size_guidance={ "scalars": 0 }  # 0 = load every scalar
 )
 ea.Reload()
+
+from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--logdir", required=True,
+                    help="path to the TB run directory (the one containing events.out.tfevents.* files)")
+args = parser.parse_args()
+
+ea = EventAccumulator(args.logdir, size_guidance={"scalars":0})
+ea.Reload()
+
+print("Available scalar tags:")
+for tag in ea.Tags()["scalars"]:
+    print("   ", tag)
+
+# now you can pick from that list:
+# train_mse = ea.Scalars("train/epoch_mse")  # if it’s in the printed list
+
 
 # 3) Grab the series you want
 train_mse = ea.Scalars("train/epoch_mse")

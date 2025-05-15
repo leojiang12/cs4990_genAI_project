@@ -8,7 +8,6 @@
 #SBATCH -t 21-00:00:00
 #SBATCH --output=logs/sd_control_train_%j.log
 #SBATCH --error=logs/sd_control_train_%j.err
-
 RUN_NAME=${1:-"controlnet3_${SLURM_JOB_ID}"}
 
 echo "===== JOB START $(date) (run=${RUN_NAME}) ====="
